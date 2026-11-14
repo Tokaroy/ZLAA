@@ -81,6 +81,8 @@ const std::vector<Setting> kSettings = {
         { "Dutch", "nl" }, { "Russian", "ru" }, { "Japanese", "ja" }, { "Korean", "ko" },
         { "Chinese (Simplified)", "zh-Hans" }, { "Chinese (Traditional)", "zh-Hant" } }, 0,
       "The language of the game's text." NEXT_START },
+    { "Interface", "Check for Updates", "LAA_UPDATE_CHECK", { { "On", NULL }, { "Off", "0" } }, 0,
+      "When the start screen opens, ask GitHub whether a newer version of ZLAA is out." },
     { "Interface", "Skip Main Menu", "LAA_SKIP_MENU", { { "Off", NULL }, { "On", "1" } }, 0,
       "Start the game right away when opening ZLAA. Settings stay in the pause menu." },
     { "Interface", "Show Shader Compilation", "LAA_SHADER_OSD", { { "Off", NULL }, { "On", "1" } }, 0,
@@ -178,6 +180,7 @@ SDL_Window *window;
 Rml::Context *context;
 Rml::ElementDocument *start_doc, *settings_doc, *pause_doc, *build_doc;
 int showing;                                             /* 0: no menu, 1: start screen, 2: pause menu */
+int update_asked;                                        /* the update check: 1 asked, 2 answered */
 int result;                                              /* what ui_frame returns next */
 int game_ready;                                          /* the start screen's Play works */
 int needs_build;                                         /* the game files are there, their code isn't: Build Game */
@@ -211,6 +214,38 @@ std::string esc(const std::string &s) {                  /* text -> RML */
 }
 
 /* ---- the start screen ---- */
+
+/* "v0.1.2" newer than "0.1.1"? (major.minor.patch, a leading v ignored) */
+bool newer_version(const char *tag, const char *mine) {
+    int a[3] = { 0, 0, 0 }, b[3] = { 0, 0, 0 };
+    if (sscanf(tag + (*tag == 'v'), "%d.%d.%d", &a[0], &a[1], &a[2]) < 2) return false;
+    sscanf(mine, "%d.%d.%d", &b[0], &b[1], &b[2]);
+    for (int i = 0; i < 3; i++)
+        if (a[i] != b[i]) return a[i] > b[i];
+    return false;
+}
+
+/* The update check (Settings > Interface > Check for Updates): asked once, when the start screen first opens; a
+ * newer release shows the badge beside the version. LAA_UPDATE_TEST=v9.9.9 pretends GitHub answered that. */
+void start_update_check() {
+    if (update_asked) return;
+    update_asked = 1;
+    for (const Setting &s : kSettings)
+        if (strcmp(s.var, "LAA_UPDATE_CHECK") == 0 && choice_of(s) != 0) { update_asked = 2; return; }
+    if (!getenv("LAA_UPDATE_TEST")) host_update_check();
+}
+
+void poll_update_check() {
+    char tag[64];
+    if (update_asked != 1) return;
+    if (getenv("LAA_UPDATE_TEST")) snprintf(tag, sizeof tag, "%s", getenv("LAA_UPDATE_TEST"));
+    else if (!host_update_result(tag, sizeof tag)) return;
+    update_asked = 2;
+    bool newer = newer_version(tag, LAA_VERSION);
+    printf("update check: latest release %s, this is %s%s\n", tag[0] ? tag : "unknown", LAA_VERSION,
+           newer ? ": update available" : "");
+    if (newer) start_doc->GetElementById("version-area")->SetClass("update", true);
+}
 
 void focus_first(Rml::ElementDocument *doc, const char *selector) {
     if (Rml::Element *e = doc->QuerySelector(selector)) e->Focus(true);
@@ -685,6 +720,7 @@ public:
             if (id == "files-row") { choose_game_files(); return; }
             if (id == "space-row") { free_up_space(); return; }
             if (id == "link-row") { SDL_OpenURL(LAA_PROJECT_URL); return; }
+            if (id == "update") { SDL_OpenURL(LAA_PROJECT_URL "/releases/latest"); return; }
             if (id == "build-go") { build_go(); return; }
             if (id == "build-speed") {                    /* Cool -> Balanced -> Fast -> Cool */
                 config["LAA_BUILD_SPEED"] = std::to_string((build_speed() + 1) % 3);
@@ -787,6 +823,7 @@ extern "C" void ui_start_menu(void) {
     showing = 1;
     result = UI_NONE;
     update_start_status();
+    start_update_check();
     start_doc->Show();
     start_doc->SetClass("animate-in", true);
     focus_first(start_doc, "#play");
@@ -870,7 +907,7 @@ extern "C" int ui_frame(void) {
     if (now - last_frame < frame_ns) SDL_DelayNS(frame_ns - (now - last_frame));
     last_frame = now = SDL_GetTicksNS();
     const char *shot = run_script();
-    if (showing == 1) { poll_picking(); update_build(); }
+    if (showing == 1) { poll_picking(); update_build(); poll_update_check(); }
     for (int a = UI_UP; a <= UI_RIGHT; a++)              /* held directions repeat */
         if (held_since[a] && now >= repeat_at[a]) { repeat_at[a] = now + 90000000ull; act(a); }
     RenderUiTarget t;

@@ -51,6 +51,10 @@ enum { UI_BUILD_IDLE, UI_BUILD_PREPARING, UI_BUILD_TRANSLATING, UI_BUILD_COMPILI
 int host_build_start(const char *exefs, int speed);   /* 0 = started (or running); speed 0 cool, 1 balanced, 2 fast */
 int host_build_progress(double *fraction, char *detail, size_t size, double *elapsed, int *cooling);   /* -> UI_BUILD_* */
 void host_build_cancel(void);
+/* Provided by the host: is a newer ZLAA out? GitHub's latest release, asked in the background; host_update_result:
+ * 1 = answered, out = the release's tag ("v0.1.2"; "" when it couldn't tell, e.g. offline) */
+void host_update_check(void);
+int host_update_result(char *out, size_t size);
 int ui_settings_changed(void);           /* 1 once after the player changed a setting */
 
 #ifdef __cplusplus

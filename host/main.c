@@ -494,9 +494,10 @@ int host_build_progress(double *fraction, char *detail, size_t size, double *ela
 
 void host_build_cancel(void) { builder_cancel(); }
 
-int host_picked_folder(char *out, size_t size) {
+/* A static String method's answer into out: 0 = null (no answer yet) */
+static int take_string(const char *method, char *out, size_t size) {
     jstring s = NULL;
-    call_activity("takePickedFolder", "()Ljava/lang/String;", NULL, &s);
+    call_activity(method, "()Ljava/lang/String;", NULL, &s);
     if (!s) return 0;
     JNIEnv *env = (JNIEnv *)SDL_GetAndroidJNIEnv();
     const char *c = (*env)->GetStringUTFChars(env, s, NULL);
@@ -505,6 +506,12 @@ int host_picked_folder(char *out, size_t size) {
     (*env)->DeleteLocalRef(env, s);
     return 1;
 }
+
+int host_picked_folder(char *out, size_t size) { return take_string("takePickedFolder", out, size); }
+
+/* the update check: ZLAAActivity asks GitHub (Java has HTTPS built in) */
+void host_update_check(void) { call_activity("checkForUpdate", "()V", NULL, NULL); }
+int host_update_result(char *out, size_t size) { return take_string("takeLatestRelease", out, size); }
 #else
 static SDL_Window *dialog_window;
 static SDL_Mutex *picked_lock;
@@ -541,6 +548,39 @@ int host_picked_folder(char *out, size_t size) {
     if (r) { snprintf(out, size, "%s", picked); picked_ready = 0; }
     SDL_UnlockMutex(picked_lock);
     return r;
+}
+
+/* the update check on a PC: curl, on a thread */
+static char latest_tag[64];
+static SDL_AtomicInt latest_ready;
+
+static int update_thread(void *arg) {
+    (void)arg;
+    char tag[64] = "", line[4096];
+    FILE *p = popen("curl -fsSL --max-time 5 -H 'Accept: application/vnd.github+json' -H 'User-Agent: ZLAA' "
+                    "https://api.github.com/repos/timbo722/ZLAA/releases/latest 2>/dev/null", "r");
+    while (p && fgets(line, sizeof line, p)) {
+        const char *t = strstr(line, "\"tag_name\"");
+        if (!t || !(t = strchr(t + 10, '"'))) continue;
+        size_t n = strcspn(t + 1, "\"");
+        if (n < sizeof tag) { memcpy(tag, t + 1, n); tag[n] = 0; }
+    }
+    if (p) pclose(p);
+    memcpy(latest_tag, tag, sizeof tag);
+    SDL_SetAtomicInt(&latest_ready, 1);
+    return 0;
+}
+
+void host_update_check(void) {
+    SDL_SetAtomicInt(&latest_ready, 0);
+    SDL_DetachThread(SDL_CreateThread(update_thread, "update check", NULL));
+}
+
+int host_update_result(char *out, size_t size) {
+    if (!SDL_GetAtomicInt(&latest_ready)) return 0;
+    SDL_SetAtomicInt(&latest_ready, 0);
+    snprintf(out, size, "%s", latest_tag);
+    return 1;
 }
 #endif
 #endif

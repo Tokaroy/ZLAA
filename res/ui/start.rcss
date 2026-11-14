@@ -269,12 +269,52 @@ start-note {
 start-note.shown { display: block; }
 start-note.bad { color: var(--bad); }
 
-version-label {
+/* bottom right: the version, and when GitHub has a newer release, a badge that opens its page (ui.cpp update check) */
+version-area {
     position: absolute;
     right: 40dp;
-    bottom: 44dp;
+    bottom: 38dp;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--gap-md);
+}
+
+version-label {
     font-size: 15dp;
     color: var(--muted);
+}
+
+button#update {
+    display: none;
+    height: 32dp;
+    padding: 0 14dp 0 10dp;
+    border-radius: 16dp;
+    line-height: 32dp;
+    font-size: 15dp;
+    font-weight: bold;
+    color: var(--gold);
+    background-color: rgba(0, 0, 0, 55%);
+    border-width: 1dp;
+    border-color: rgba(var(--gold-rgb), 60%);
+}
+
+version-area.update button#update {
+    display: block;
+}
+
+button#update icon {
+    width: 20dp;
+    margin-right: 6dp;
+    font-size: 20dp;
+    decorator: text("&#xf090;" center center);
+}
+
+button#update:hover,
+button#update:focus-visible {
+    color: var(--night);
+    background-color: var(--gold);
+    border-color: var(--gold);
 }
 
 /* the start: everything rises into place, one after another */

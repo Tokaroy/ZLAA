@@ -43,6 +43,9 @@
     </menu-list>
     <start-note id="start-note" class="rise d5" />
     <status-chip id="game-status" class="rise d5"><dot /><game-status-label id="game-status-label" /><game-version id="game-version" /></status-chip>
-    <version-label class="rise d6">Version <version-number id="version" /></version-label>
+    <version-area id="version-area" class="rise d6">
+        <button id="update"><icon class="update" /><update-label id="update-label">Update available</update-label></button>
+        <version-label>Version <version-number id="version" /></version-label>
+    </version-area>
 </body>
 </rml>

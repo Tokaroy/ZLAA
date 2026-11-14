@@ -8,16 +8,24 @@ import android.provider.Settings;
 import android.util.Log;
 import android.view.KeyEvent;
 
+import org.json.JSONObject;
 import org.libsdl.app.SDLActivity;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 /**
  * ZLAAActivity - SDL's activity, plus what the start screen needs from Android to find the player's game files
- * where they are: a folder picker and "All files access" (the game's 6 GB are read in place, never copied).
+ * where they are: a folder picker and "All files access" (the game's 6 GB are read in place, never copied); and the
+ * update check (GitHub's latest release, when the player hasn't turned it off).
  * The native side (host/main.c) calls these static methods through JNI and polls takePickedFolder().
  */
 public class ZLAAActivity extends SDLActivity {
     private static final String TAG = "ZLAA";
     private static final int PICK_FOLDER = 0x4C41;
+    private static final String LATEST_RELEASE_API = "https://api.github.com/repos/timbo722/ZLAA/releases/latest";
 
     /** The folder chosen: a file path; "" when the picker was cancelled or the folder can't be read as a path;
      *  null while there is no answer (yet). */
@@ -59,6 +67,45 @@ public class ZLAAActivity extends SDLActivity {
         String p = picked;
         picked = null;
         return p;
+    }
+
+    /** The newest release's tag ("v0.1.2"); "" when the check failed (offline...); null while there is no answer. */
+    private static volatile String latestRelease;
+
+    /** Asks GitHub for the newest release, in the background (5 s at most); the answer comes to takeLatestRelease(). */
+    public static void checkForUpdate() {
+        latestRelease = null;
+        new Thread(() -> {
+            String tag = "";
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(LATEST_RELEASE_API).openConnection();
+                c.setConnectTimeout(5000);
+                c.setReadTimeout(5000);
+                c.setRequestProperty("Accept", "application/vnd.github+json");
+                c.setRequestProperty("User-Agent", "ZLAA");
+                if (c.getResponseCode() == 200) {
+                    ByteArrayOutputStream body = new ByteArrayOutputStream();
+                    try (InputStream in = c.getInputStream()) {
+                        byte[] b = new byte[8192];
+                        for (int n; (n = in.read(b)) > 0;) body.write(b, 0, n);
+                    }
+                    tag = new JSONObject(body.toString("UTF-8")).optString("tag_name", "");
+                }
+            } catch (Exception e) {
+                Log.i(TAG, "update check: " + e);
+            } finally {
+                if (c != null) c.disconnect();
+            }
+            latestRelease = tag;
+        }, "update check").start();
+    }
+
+    /** The update check's answer once (see latestRelease), then null again. */
+    public static String takeLatestRelease() {
+        String t = latestRelease;
+        latestRelease = null;
+        return t;
     }
 
     /** Android's Back key. SDL turns a controller's Back key into the controller's Back/Select button, which the

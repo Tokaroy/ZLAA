@@ -23,7 +23,7 @@ ICONS = {
     0xE002: "warning", 0xE5CA: "check", 0xE5CD: "close", 0xE897: "lock", 0xE5CB: "chevron_left",
     0xE5CC: "chevron_right", 0xE8B5: "schedule", 0xE863: "autorenew", 0xE887: "help", 0xE88E: "info",
     0xE8B8: "settings", 0xE037: "play_arrow", 0xE9BA: "logout", 0xE2C7: "folder", 0xE5C8: "arrow_forward",
-    0xE034: "pause", 0xE050: "volume_up", 0xE30C: "tv", 0xE061: "fiber_manual_record",
+    0xE034: "pause", 0xE050: "volume_up", 0xE30C: "tv", 0xE061: "fiber_manual_record", 0xF090: "download",
 }
 
 
