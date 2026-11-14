@@ -224,6 +224,13 @@ static int create_device(void) {
     /* Vulkan 1.3 features we rely on: rendering without render pass objects */
     VkPhysicalDeviceVulkan13Features v13 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
                                              .dynamicRendering = VK_TRUE };
+    {                                                 /* demote-to-helper: KIL that keeps the pixel for its quad */
+        VkPhysicalDeviceVulkan13Features h13 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+        VkPhysicalDeviceFeatures2 have = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &h13 };
+        vkGetPhysicalDeviceFeatures2(vk.gpu, &have);
+        v13.shaderDemoteToHelperInvocation = h13.shaderDemoteToHelperInvocation;
+        vk.demote = h13.shaderDemoteToHelperInvocation;
+    }
     /* buffer device addresses: shaders read the game's memory through 64-bit pointers (LDG) */
     /* draw parameters: shaders see the draw's first instance (Maxwell's instance id counts from it) */
     VkPhysicalDeviceVulkan11Features v11 = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,

@@ -774,6 +774,12 @@ static int emit_flow(T *t, const Inst *in, uint32_t next_block) {
         return 1;
     case OP_KIL:
         if (t->options & SHADER_DEBUG_CONST) return 1;     /* (debugging: draw every pixel) */
+        if (t->options & SHADER_KIL_DEMOTE) {            /* dropped, but still there for its quad's neighbours */
+            spv_op(&t->s, SEC_BODY, SpvOpDemoteToHelperInvocation, 0);
+            t->uses_demote = 1;
+            t->info->discards = 1;
+            return 1;
+        }
         spv_op(&t->s, SEC_BODY, SpvOpKill, 0);
         t->info->discards = 1;
         t->terminated = 1;
@@ -1033,6 +1039,10 @@ int shader_translate(const uint8_t *code, size_t size, int stage, const uint8_t 
         if (t->uses_quad) spv_op(s, SEC_CAPS, SpvOpCapability, 1, SpvCapabilityGroupNonUniformQuad);
         if (t->in_base_instance) spv_op(s, SEC_CAPS, SpvOpCapability, 1, SpvCapabilityDrawParameters);
         if (t->uses_shuffle) spv_op(s, SEC_CAPS, SpvOpCapability, 1, SpvCapabilityGroupNonUniformShuffle);
+        if (t->uses_demote) {
+            spv_op(s, SEC_CAPS, SpvOpCapability, 1, SpvCapabilityDemoteToHelperInvocation);
+            spv_inst_str(s, SEC_EXT, SpvOpExtension, NULL, 0, "SPV_EXT_demote_to_helper_invocation", NULL, 0);
+        }
         if (t->uses_pointers) {                           /* (decided while translating) */
             spv_op(s, SEC_CAPS, SpvOpCapability, 1, SpvCapabilityPhysicalStorageBufferAddresses);
             spv_inst_str(s, SEC_EXT, SpvOpExtension, NULL, 0, "SPV_KHR_physical_storage_buffer", NULL, 0);

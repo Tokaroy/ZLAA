@@ -87,6 +87,7 @@ typedef struct {
     VkCommandPool pool;
     int cpu_renderer;                /* the device is a CPU renderer (llvmpipe: WSL has no GPU driver) */
     int host_import;                 /* VK_EXT_external_memory_host: GPU access to guest memory */
+    int demote;                      /* shaderDemoteToHelperInvocation (Vulkan 1.3; pipeline.c LAA_KIL_DEMOTE) */
     VkDeviceSize import_alignment;
     int fd_export;                   /* otherwise VK_KHR_external_memory_fd: pools become exported memory (buffer.c) */
     VkPhysicalDeviceLimits limits;

@@ -55,6 +55,7 @@ typedef struct {
     int uses_pointers;               /* global memory (LDG/STG): 64-bit physical pointers */
     uint32_t local_mem, local_words; /* local memory (LDL/STL): a uint array of local_words, made on first use */
     int uses_quad, uses_shuffle;     /* SHFL: subgroup quad / shuffle operations */
+    int uses_demote;                 /* KIL as demote-to-helper (SHADER_KIL_DEMOTE) */
     uint32_t in_attr[32], out_attr[32];
     uint32_t in_position, in_front_facing, in_vertex_index, in_instance_index, in_base_instance, frag_coord, in_lane;
     uint32_t in_local_id, in_workgroup_id, t_v3u;

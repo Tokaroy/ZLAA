@@ -61,9 +61,12 @@ enum { SHADER_GL_DEPTH = 1,         /* vertex: clip-space z is -w..w (OpenGL/NVN
        SHADER_FULL_HALF = 16,        /* packed-half arithmetic in full 32-bit precision (not RelaxedPrecision) */
        SHADER_GUARD_REPORT = 32,     /* (debugging) a shader that ends at the dispatch guard (translate.c)
                                       * writes id and why in its slot at shader_guard_address */
-       SHADER_DEBUG_STUCK = 64 };    /* fragment (debugging): the pixels whose x and y are multiples of
+       SHADER_DEBUG_STUCK = 64,      /* fragment (debugging): the pixels whose x and y are multiples of
                                       * shader_stuck_every never leave the dispatch loop (until the guard ends
                                       * them): what a loop that never ends costs the GPU */
+       SHADER_KIL_DEMOTE = 128 };    /* fragment: KIL demotes the pixel to a helper (it carries on, its
+                                      * results dropped) instead of ending it: quad operations after a KIL
+                                      * then never wait on a pixel that is gone */
 extern uint64_t shader_capture_address;   /* a GPU address (buffer device address) */
 /* SHADER_GUARD_REPORT: SHADER_GUARD_SLOTS slots of 4 words (id low, id high, reason, 0); a shader's
  * slot is shader_guard_slot(id); reason SHADER_GUARD_NO_BLOCK, _JUMPS (ended) or _LONG (4096 jumps: warned) */

@@ -123,6 +123,9 @@ static HostShader *make_shader(uint64_t code, uint64_t control, int stage, uint3
         if (full_half < 0) full_half = getenv("LAA_FULL_HALF") != NULL;
         if (full_half) options |= SHADER_FULL_HALF;
         if (shader_guard_address) options |= SHADER_GUARD_REPORT;
+        static int demote = -1;                      /* LAA_KIL_DEMOTE=1: KIL as demote-to-helper (GPU hang test) */
+        if (demote < 0) demote = getenv("LAA_KIL_DEMOTE") && atoi(getenv("LAA_KIL_DEMOTE")) && vk.demote;
+        if (demote && stage == SHADER_FRAGMENT) options |= SHADER_KIL_DEMOTE;
         if (!ahead && stage == SHADER_VERTEX && getenv("LAA_DEBUG_VS") && strtoull(getenv("LAA_DEBUG_VS"), NULL, 0) == code) {
             if (!capture_buffer) make_capture_buffer();
             options |= SHADER_DEBUG_CAPTURE;
