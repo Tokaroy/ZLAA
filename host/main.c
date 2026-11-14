@@ -512,6 +512,22 @@ int host_picked_folder(char *out, size_t size) { return take_string("takePickedF
 /* the update check: ZLAAActivity asks GitHub (Java has HTTPS built in) */
 void host_update_check(void) { call_activity("checkForUpdate", "()V", NULL, NULL); }
 int host_update_result(char *out, size_t size) { return take_string("takeLatestRelease", out, size); }
+int host_update_possible(void) { return 1; }
+void host_update_start(void) { call_activity("startUpdate", "()V", NULL, NULL); }
+void host_update_cancel(void) { call_activity("cancelUpdate", "()V", NULL, NULL); }
+
+int host_update_status(double *done_mb, double *total_mb, char *message, size_t size) {
+    char s[600];
+    int state = UI_UPDATE_IDLE;
+    long long done = 0, total = 0;
+    int at = 0;
+    *message = 0;
+    if (!take_string("updateStatus", s, sizeof s)) return state;
+    if (sscanf(s, "%d\t%lld\t%lld\t%n", &state, &done, &total, &at) >= 3 && at > 0) snprintf(message, size, "%s", s + at);
+    *done_mb = done / 1048576.0;
+    *total_mb = total / 1048576.0;
+    return state;
+}
 #else
 static SDL_Window *dialog_window;
 static SDL_Mutex *picked_lock;
@@ -581,6 +597,15 @@ int host_update_result(char *out, size_t size) {
     SDL_SetAtomicInt(&latest_ready, 0);
     snprintf(out, size, "%s", latest_tag);
     return 1;
+}
+
+int host_update_possible(void) { return 0; }   /* (a PC build updates from the source: the badge opens the page) */
+void host_update_start(void) {}
+void host_update_cancel(void) {}
+int host_update_status(double *done_mb, double *total_mb, char *message, size_t size) {
+    *done_mb = *total_mb = 0;
+    if (size) *message = 0;
+    return UI_UPDATE_IDLE;
 }
 #endif
 #endif

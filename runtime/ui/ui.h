@@ -55,6 +55,14 @@ void host_build_cancel(void);
  * 1 = answered, out = the release's tag ("v0.1.2"; "" when it couldn't tell, e.g. offline) */
 void host_update_check(void);
 int host_update_result(char *out, size_t size);
+/* Updating in the app (Android: the APK downloaded, checked, and handed to Android's installer; elsewhere not
+ * possible: host_update_possible 0, and the badge opens the release page) */
+enum { UI_UPDATE_IDLE, UI_UPDATE_DOWNLOADING, UI_UPDATE_VERIFYING, UI_UPDATE_INSTALLING, UI_UPDATE_FAILED,
+       UI_UPDATE_PERMISSION };
+int host_update_possible(void);
+void host_update_start(void);
+void host_update_cancel(void);
+int host_update_status(double *done_mb, double *total_mb, char *message, size_t size);   /* -> UI_UPDATE_* */
 int ui_settings_changed(void);           /* 1 once after the player changed a setting */
 
 #ifdef __cplusplus

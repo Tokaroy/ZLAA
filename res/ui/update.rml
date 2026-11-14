@@ -1,0 +1,21 @@
+<rml>
+<head>
+    <title>Update ZLAA</title>
+    <link type="text/rcss" href="theme.rcss" />
+    <link type="text/rcss" href="window.rcss" />
+</head>
+<body>
+    <window id="window" class="small build">
+        <heading class="window-title"><icon class="update" />Update ZLAA</heading>
+        <p id="update-intro" />
+        <progress-track id="update-track"><progress-fill id="update-fill" /></progress-track>
+        <build-line id="update-line"><build-percent id="update-percent" /><build-time id="update-size" /></build-line>
+        <p id="update-detail" class="hint" />
+        <menu-list>
+            <button id="update-go">Update</button>
+            <button id="update-notes">Release Notes</button>
+            <button id="update-back">Not Now</button>
+        </menu-list>
+    </window>
+</body>
+</rml>

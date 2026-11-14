@@ -12,8 +12,11 @@
     <!-- "All files access": the player's game files (6 GB) are read where they are, in a folder they choose -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
-    <!-- the update check only: one request to GitHub's API at start-up (Settings > Interface > Check for Updates) -->
+    <!-- updates: the check (one request to GitHub's API when the start screen opens; Settings > Interface > Check
+         for Updates) and, when the player chooses Update, the new APK downloaded and handed to Android's installer
+         (Android asks the player to confirm; the first time, to allow this app to install apps) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Vulkan 1.3 (the renderer needs it) and a gamepad -->
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x403000" android:required="true" />

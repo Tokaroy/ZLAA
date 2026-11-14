@@ -82,7 +82,7 @@ const std::vector<Setting> kSettings = {
         { "Chinese (Simplified)", "zh-Hans" }, { "Chinese (Traditional)", "zh-Hant" } }, 0,
       "The language of the game's text." NEXT_START },
     { "Interface", "Check for Updates", "LAA_UPDATE_CHECK", { { "On", NULL }, { "Off", "0" } }, 0,
-      "When the start screen opens, ask GitHub whether a newer version of ZLAA is out." },
+      "Check for updates on GitHub once the app starts." },
     { "Interface", "Skip Main Menu", "LAA_SKIP_MENU", { { "Off", NULL }, { "On", "1" } }, 0,
       "Start the game right away when opening ZLAA. Settings stay in the pause menu." },
     { "Interface", "Show Shader Compilation", "LAA_SHADER_OSD", { { "Off", NULL }, { "On", "1" } }, 0,
@@ -178,9 +178,10 @@ System sys;
 Files files;
 SDL_Window *window;
 Rml::Context *context;
-Rml::ElementDocument *start_doc, *settings_doc, *pause_doc, *build_doc;
+Rml::ElementDocument *start_doc, *settings_doc, *pause_doc, *build_doc, *update_doc;
 int showing;                                             /* 0: no menu, 1: start screen, 2: pause menu */
 int update_asked;                                        /* the update check: 1 asked, 2 answered */
+std::string update_tag;                                  /* the newer release's tag ("v0.1.2") */
 int result;                                              /* what ui_frame returns next */
 int game_ready;                                          /* the start screen's Play works */
 int needs_build;                                         /* the game files are there, their code isn't: Build Game */
@@ -232,19 +233,86 @@ void start_update_check() {
     update_asked = 1;
     for (const Setting &s : kSettings)
         if (strcmp(s.var, "LAA_UPDATE_CHECK") == 0 && choice_of(s) != 0) { update_asked = 2; return; }
-    if (!getenv("LAA_UPDATE_TEST")) host_update_check();
+    host_update_check();                                 /* (also when faked: the APK's size comes with it) */
 }
 
 void poll_update_check() {
     char tag[64];
     if (update_asked != 1) return;
+    if (!host_update_result(tag, sizeof tag)) return;
     if (getenv("LAA_UPDATE_TEST")) snprintf(tag, sizeof tag, "%s", getenv("LAA_UPDATE_TEST"));
-    else if (!host_update_result(tag, sizeof tag)) return;
     update_asked = 2;
     bool newer = newer_version(tag, LAA_VERSION);
     printf("update check: latest release %s, this is %s%s\n", tag[0] ? tag : "unknown", LAA_VERSION,
            newer ? ": update available" : "");
-    if (newer) start_doc->GetElementById("version-area")->SetClass("update", true);
+    if (!newer) return;
+    update_tag = tag;
+    start_doc->GetElementById("version-area")->SetClass("update", true);
+}
+
+/* ---- the update window (the badge, on Android): download, check, and Android's installer ---- */
+
+void focus_first(Rml::ElementDocument *doc, const char *selector);
+
+int update_shown_state = -1;
+
+void refresh_update() {
+    double done, total;
+    char message[512];
+    int state = host_update_status(&done, &total, message, sizeof message);
+    bool busy = state == UI_UPDATE_DOWNLOADING || state == UI_UPDATE_VERIFYING || state == UI_UPDATE_INSTALLING;
+    char b[160];
+    const char *v = update_tag.c_str() + (update_tag[0] == 'v');
+    if (total > 0) snprintf(b, sizeof b, "ZLAA %s is out. Download it (%.0f MB) and update now?", v, total);
+    else snprintf(b, sizeof b, "ZLAA %s is out. Download it and update now?", v);
+    update_doc->GetElementById("update-intro")->SetInnerRML(esc(b));
+    bool bar = state == UI_UPDATE_DOWNLOADING || state == UI_UPDATE_VERIFYING;
+    update_doc->GetElementById("update-track")->SetProperty("display", bar ? "block" : "none");
+    update_doc->GetElementById("update-line")->SetProperty("display", bar ? "flex" : "none");
+    double f = total > 0 ? done / total : 0;
+    update_doc->GetElementById("update-fill")->SetProperty("width", std::to_string((f > 1 ? 1 : f) * 100) + "%");
+    snprintf(b, sizeof b, "%d%%", (int)(f * 100));
+    update_doc->GetElementById("update-percent")->SetInnerRML(bar ? b : "");
+    snprintf(b, sizeof b, total > 0 ? "%.0f of %.0f MB" : "%.0f MB", done, total);
+    update_doc->GetElementById("update-size")->SetInnerRML(bar ? b : "");
+    const char *detail = state == UI_UPDATE_PERMISSION
+                             ? "Allow ZLAA to install apps on the page that opened, then come back and choose Update."
+                       : state == UI_UPDATE_VERIFYING ? "Checking the download\xE2\x80\xA6"
+                       : state == UI_UPDATE_FAILED ? message : "";
+    update_doc->GetElementById("update-detail")->SetInnerRML(esc(detail));
+    update_doc->GetElementById("update-detail")->SetProperty("display", *detail ? "block" : "none");
+    if (state != update_shown_state) {                   /* the buttons for this state */
+        update_shown_state = state;
+        update_doc->GetElementById("update-go")->SetInnerRML(busy ? "Cancel" : state == UI_UPDATE_FAILED ? "Try Again" : "Update");
+        update_doc->GetElementById("update-go")->SetProperty("display", state == UI_UPDATE_INSTALLING ? "none" : "block");
+        update_doc->GetElementById("update-back")->SetInnerRML(busy ? "Hide" : "Not Now");
+        if (state == UI_UPDATE_INSTALLING) update_doc->GetElementById("update-back")->Focus(true);
+    }
+}
+
+void open_update() {
+    if (!host_update_possible()) { SDL_OpenURL(LAA_PROJECT_URL "/releases/latest"); return; }
+    update_shown_state = -1;
+    update_doc->Show(Rml::ModalFlag::Modal, Rml::FocusFlag::None);
+    update_doc->GetElementById("window")->SetAttribute("open", "");
+    refresh_update();
+    focus_first(update_doc, "#update-go");
+}
+
+void close_update() {
+    update_doc->GetElementById("window")->RemoveAttribute("open");
+    update_doc->Hide();
+    start_doc->Focus();
+    focus_first(start_doc, "#update");
+}
+
+void update_go() {
+    double d, t;
+    char m[8];
+    int state = host_update_status(&d, &t, m, sizeof m);
+    if (state == UI_UPDATE_DOWNLOADING || state == UI_UPDATE_VERIFYING) host_update_cancel();
+    else if (state != UI_UPDATE_INSTALLING) host_update_start();
+    refresh_update();
 }
 
 void focus_first(Rml::ElementDocument *doc, const char *selector) {
@@ -681,6 +749,7 @@ bool is_control(Rml::Element *e) {                      /* buttons and rows (the
 
 Rml::ElementDocument *top_doc() {                        /* the document the controller works in now */
     if (build_doc && build_doc->IsVisible()) return build_doc;
+    if (update_doc && update_doc->IsVisible()) return update_doc;
     if (settings_doc && settings_doc->IsVisible()) return settings_doc;
     return showing == 2 ? pause_doc : start_doc;
 }
@@ -693,7 +762,7 @@ bool restore_focus() {
     if (is_control(f) && f->GetOwnerDocument() == doc) return false;
     Rml::Element *to = last_focus_doc == doc && !last_focus_id.empty() ? doc->GetElementById(last_focus_id) : NULL;
     if (!to || !to->IsVisible(true))
-        to = doc->QuerySelector(doc == build_doc ? "#build-go" : doc == settings_doc ? "row" : doc == pause_doc ? "#resume" : "#play");
+        to = doc->QuerySelector(doc == build_doc ? "#build-go" : doc == update_doc ? "#update-go" : doc == settings_doc ? "row" : doc == pause_doc ? "#resume" : "#play");
     return to && to->Focus(true);
 }
 
@@ -720,7 +789,10 @@ public:
             if (id == "files-row") { choose_game_files(); return; }
             if (id == "space-row") { free_up_space(); return; }
             if (id == "link-row") { SDL_OpenURL(LAA_PROJECT_URL); return; }
-            if (id == "update") { SDL_OpenURL(LAA_PROJECT_URL "/releases/latest"); return; }
+            if (id == "update") { open_update(); return; }
+            if (id == "update-go") { update_go(); return; }
+            if (id == "update-notes") { SDL_OpenURL(LAA_PROJECT_URL "/releases/latest"); return; }
+            if (id == "update-back") { close_update(); return; }
             if (id == "build-go") { build_go(); return; }
             if (id == "build-speed") {                    /* Cool -> Balanced -> Fast -> Cool */
                 config["LAA_BUILD_SPEED"] = std::to_string((build_speed() + 1) % 3);
@@ -767,6 +839,7 @@ void act(int action) {
     case UI_ACCEPT: key(Rml::Input::KI_RETURN); break;
     case UI_BACK:
         if (build_doc && build_doc->IsVisible()) close_build();
+        else if (update_doc && update_doc->IsVisible()) close_update();
         else if (in_settings) close_settings();
         else if (showing == 2) result = UI_RESUME;
         break;
@@ -814,7 +887,8 @@ extern "C" int ui_init(void *sdl_window, const UiPaths *p) {
     settings_doc = load("settings.rml");
     pause_doc = load("pause.rml");
     build_doc = load("build.rml");
-    if (!start_doc || !settings_doc || !pause_doc || !build_doc) return -1;
+    update_doc = load("update.rml");
+    if (!start_doc || !settings_doc || !pause_doc || !build_doc || !update_doc) return -1;
     start_doc->GetElementById("version")->SetInnerRML(LAA_VERSION);
     return 0;
 }
@@ -908,6 +982,7 @@ extern "C" int ui_frame(void) {
     last_frame = now = SDL_GetTicksNS();
     const char *shot = run_script();
     if (showing == 1) { poll_picking(); update_build(); poll_update_check(); }
+    if (update_doc->IsVisible()) refresh_update();
     for (int a = UI_UP; a <= UI_RIGHT; a++)              /* held directions repeat */
         if (held_since[a] && now >= repeat_at[a]) { repeat_at[a] = now + 90000000ull; act(a); }
     RenderUiTarget t;
@@ -927,6 +1002,7 @@ extern "C" int ui_frame(void) {
         result = UI_NONE;
         if (settings_doc->IsVisible()) close_settings();
         build_doc->Hide();
+        update_doc->Hide();
         start_doc->Hide();
         pause_doc->Hide();
         if (r == UI_PLAY) ui_apply_settings();

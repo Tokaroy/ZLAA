@@ -54,6 +54,7 @@ heading.window-title icon {
 
 icon.pause { decorator: text("&#xe034;" center center); }
 icon.build { decorator: text("&#xe863;" center center); }
+icon.update { decorator: text("&#xf090;" center center); }
 
 header {
     display: flex;
