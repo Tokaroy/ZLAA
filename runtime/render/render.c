@@ -280,7 +280,7 @@ int render_capture(uint64_t texture, const char *path, const int32_t crop[4], ui
 }
 
 /* ---- the overlays, each a rounded dark pill in a corner of the game's picture: LAA_SHOW_FPS=1, the frame rate
- * (frames counted over half a second; coral when under 55 or a frame took over 20 ms, i.e. missed a 60 Hz refresh)
+ * (frames counted over half a second; always the same colour: the player found a colour change on slow frames distracting)
  * in corner LAA_FPS_CORNER; LAA_SHADER_OSD=1, "Compiling shaders" in the corner beside it for a second after a
  * pipeline compile missed the driver's cache. The CPU draws them into a small texture (one row each; Nunito's
  * letters from osd_font.h, premultiplied colours), uploads a row when it changes, and they are drawn over the
@@ -303,8 +303,8 @@ static struct {
     int dirty[OSD_ROWS], w[OSD_ROWS], h; /* rows to upload; each pill's width, their height */
     int big;                             /* 1080p sizes, else 720p's */
     int shown;                           /* the shader pill is showing */
-    double window_start, last, worst, drawn_at;
-    int frames, fps, slow;
+    double window_start, last, drawn_at;
+    int frames, fps;
 } osd = { .on = -1 };
 
 static double osd_now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
@@ -383,7 +383,7 @@ static int osd_text(int row, int x, int baseline, const OsdFont *f, const char *
 }
 
 static void osd_draw_fps(void) {
-    static const uint8_t text[3] = { 236, 231, 214 }, coral[3] = { 238, 132, 104 }, gold[3] = { 233, 196, 106 };
+    static const uint8_t text[3] = { 236, 231, 214 }, gold[3] = { 233, 196, 106 };
     const OsdFont *num = &osd_fonts[osd.big ? 2 : 1], *label = &osd_fonts[osd.big ? 1 : 0];
     int pad = osd.big ? 18 : 12, gap = osd.big ? 6 : 4;
     char n[8];
@@ -392,7 +392,7 @@ static void osd_draw_fps(void) {
     osd.w[OSD_FPS] = pad + wn + gap + wl + pad;
     osd_pill(OSD_FPS, osd.w[OSD_FPS], osd.h);
     int base = (osd.h + num->glyphs['0' - 32].h) / 2;
-    osd_text(OSD_FPS, pad, base, num, n, osd.slow ? coral : text, 1);
+    osd_text(OSD_FPS, pad, base, num, n, text, 1);
     osd_text(OSD_FPS, pad + wn + gap, base, label, "FPS", gold, 1);
     osd.dirty[OSD_FPS] = 1;
 }
@@ -424,16 +424,14 @@ static void osd_update(void) {
         if (osd.on && osd.w[OSD_FPS]) osd_draw_fps();
     }
     if (osd.on) {
-        if (t - osd.last > osd.worst) osd.worst = t - osd.last;
         osd.last = t;
         osd.frames++;
         if (t - osd.window_start >= 500) {
             double fps = osd.frames * 1000.0 / (t - osd.window_start);
-            int f = fps > 999 ? 999 : (int)(fps + 0.5), slow = fps < 55 || osd.worst > 20;
-            if (f != osd.fps || slow != osd.slow || !osd.w[OSD_FPS]) { osd.fps = f; osd.slow = slow; osd_draw_fps(); }
+            int f = fps > 999 ? 999 : (int)(fps + 0.5);
+            if (f != osd.fps || !osd.w[OSD_FPS]) { osd.fps = f; osd_draw_fps(); }
             osd.window_start = t;
             osd.frames = 0;
-            osd.worst = 0;
         }
     }
     osd.shown = osd.shaders && t - (double)render_last_slow_compile() < 1000;
@@ -664,7 +662,6 @@ void render_present(uint64_t texture, const int32_t crop[4]) {
         osd.w[OSD_FPS] = 0;                          /* (drawn again at the next count, from now) */
         osd.window_start = osd.last = osd_now_ms();
         osd.frames = 0;
-        osd.worst = 0;
     }
     if (osd.on || osd.shaders) osd_update();
     int from_gpu = h && h->gpu_written;
