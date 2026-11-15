@@ -126,6 +126,9 @@ static HostShader *make_shader(uint64_t code, uint64_t control, int stage, uint3
         static int demote = -1;                      /* LAA_KIL_DEMOTE=1: KIL as demote-to-helper (GPU hang test) */
         if (demote < 0) demote = getenv("LAA_KIL_DEMOTE") && atoi(getenv("LAA_KIL_DEMOTE")) && vk.demote;
         if (demote && stage == SHADER_FRAGMENT) options |= SHADER_KIL_DEMOTE;
+        static int no_quad = -1;                     /* LAA_NO_QUAD=1: SHFL without lane exchanges (GPU hang test) */
+        if (no_quad < 0) no_quad = getenv("LAA_NO_QUAD") && atoi(getenv("LAA_NO_QUAD"));
+        if (no_quad) options |= SHADER_DEBUG_NO_QUAD;
         if (!ahead && stage == SHADER_VERTEX && getenv("LAA_DEBUG_VS") && strtoull(getenv("LAA_DEBUG_VS"), NULL, 0) == code) {
             if (!capture_buffer) make_capture_buffer();
             options |= SHADER_DEBUG_CAPTURE;

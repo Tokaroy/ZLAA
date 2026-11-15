@@ -343,6 +343,11 @@ int emit_alu(T *t, const Inst *in) {
         int b_imm = bit(w, 28), c_imm = bit(w, 29);
         uint32_t b = bits(w, 20, 5), c = bits(w, 34, 13), value = get_u(t, ra);
         uint32_t scope = cu(t, SpvScopeSubgroup);
+        if (t->options & SHADER_DEBUG_NO_QUAD) {          /* (hang test: no lane exchanges at all) */
+            set_u(t, rd, value);
+            if (pd != 7) set_p(t, pd, spv_bool_constant(&t->s, t->t_bool, 1));
+            return 1;
+        }
         if (b_imm && c_imm && c == 0x1C03 && ((mode == 3 && b >= 1 && b <= 3) || mode == 0)) {
             /* within the 2x2 quad of pixels (lanes 0 1 / 2 3, also Vulkan's order): xor 1, 2, 3 =
              * swap horizontally, vertically, diagonally; IDX = read lane b of the quad */
