@@ -596,6 +596,25 @@ void nvn_present(const Window *w, uint64_t texture) {
             fprintf(stderr, "peek %#" PRIx64 ": %08x %g\n", peek_addr + 4 * i, v, f);
         }
     }
+    /* LAA_PEEK_MAX=address,words,limit: every frame, report the words in that range above limit (debugging: a
+     * table the GPU loops over, e.g. the beach's per-tile light counts) */
+    static uint64_t pm_addr, pm_words, pm_limit;
+    static int pm_init;
+    if (!pm_init) {
+        pm_init = 1;
+        if (getenv("LAA_PEEK_MAX")) sscanf(getenv("LAA_PEEK_MAX"), "%" SCNi64 ",%" SCNi64 ",%" SCNi64, &pm_addr, &pm_words, &pm_limit);
+    }
+    if (pm_addr) {
+        uint32_t max = 0;
+        int over = 0;
+        for (uint64_t i = 0; i < pm_words; i++) {
+            uint32_t v = g_ld32(pm_addr + 4 * i);
+            if (v > max) max = v;
+            if (v > pm_limit && over++ < 4)
+                fprintf(stderr, "peek max: frame %" PRIu64 " word %" PRIu64 " (%#" PRIx64 ") = %#x\n", frames, i, pm_addr + 4 * i, v);
+        }
+        if (frames % 300 == 0) fprintf(stderr, "peek max: frame %" PRIu64 " largest %#x\n", frames, max);
+    }
     if (frame_stats < 0) frame_stats = getenv("LAA_FRAME_STATS") != NULL;
     if (frame_stats) {
         double t = now_ms();

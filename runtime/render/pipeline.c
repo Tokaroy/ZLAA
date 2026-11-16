@@ -62,6 +62,10 @@ void render_guard_init(void) {                       /* (before any shader is tr
         if (shader_dispatch_limit < 16) shader_dispatch_limit = 16;
         fprintf(stderr, "render: LAA_DISPATCH_LIMIT: shaders end after %u jumps\n", shader_dispatch_limit);
     }
+    if (getenv("LAA_DISPATCH_WARN")) {               /* (with LAA_SHADER_GUARD: how many jumps real shaders need) */
+        shader_dispatch_warn = (uint32_t)strtoul(getenv("LAA_DISPATCH_WARN"), NULL, 0);
+        if (shader_dispatch_warn < 2) shader_dispatch_warn = 2;
+    }
     if (!getenv("LAA_SHADER_GUARD")) return;
     guard_ptr = debug_buffer(16 * SHADER_GUARD_SLOTS, &guard_buffer, &shader_guard_address);
     memset((void *)guard_ptr, 0, 16 * SHADER_GUARD_SLOTS);

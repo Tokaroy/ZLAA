@@ -862,6 +862,7 @@ static void emit_predicated(T *t, const Inst *in, uint32_t next_block) {
 uint64_t shader_guard_address;
 uint32_t shader_stuck_every = 256;
 uint32_t shader_dispatch_limit = DISPATCH_LIMIT;     /* (LAA_DISPATCH_LIMIT: another limit, to see what it changes) */
+uint32_t shader_dispatch_warn = DISPATCH_WARN;       /* (LAA_DISPATCH_WARN: report shaders that go past n jumps) */
 
 /* SHADER_GUARD_REPORT: write id and reason in this shader's slot (shader.h); the runtime reads
  * and clears it (render_guard_check). Every invocation that gets here writes the same words. */
@@ -898,7 +899,7 @@ static void emit_program(T *t) {
         /* report a loop early (DISPATCH_WARN jumps): a wrong loop over a whole screen of pixels gets
          * the GPU reset long before any pixel reaches DISPATCH_LIMIT, and its reports with it */
         uint32_t warn = spv_id(&t->s), go_on = spv_id(&t->s);
-        uint32_t warn_at = shader_dispatch_limit > DISPATCH_WARN ? DISPATCH_WARN : shader_dispatch_limit / 2;
+        uint32_t warn_at = shader_dispatch_limit > shader_dispatch_warn ? shader_dispatch_warn : shader_dispatch_limit / 2;
         uint32_t cond = op2(t, SpvOpIEqual, t->t_bool, load(t, t->t_u32, jumps_var), cu(t, warn_at));
         spv_op(&t->s, SEC_BODY, SpvOpSelectionMerge, 2, go_on, SpvSelectionControlMaskNone);
         spv_op(&t->s, SEC_BODY, SpvOpBranchConditional, 3, cond, warn, go_on);

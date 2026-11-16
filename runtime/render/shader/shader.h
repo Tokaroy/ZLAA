@@ -77,7 +77,8 @@ enum { SHADER_GUARD_NO_BLOCK = 1, SHADER_GUARD_JUMPS = 2, SHADER_GUARD_LONG = 3 
 static inline uint32_t shader_guard_slot(uint64_t id) { return (uint32_t)((id >> 4) * 0x9E3779B1u >> 22) & (SHADER_GUARD_SLOTS - 1); }
 extern uint64_t shader_guard_address;
 extern uint32_t shader_stuck_every;      /* (SHADER_DEBUG_STUCK; a power of two) */
-extern uint32_t shader_dispatch_limit;   /* jumps one invocation may make before the shader is ended (translate.c) */
+extern uint32_t shader_dispatch_limit;   /* jumps one invocation may make before the shader is ended (translate.c; LAA_DISPATCH_LIMIT) */
+extern uint32_t shader_dispatch_warn;    /* with SHADER_GUARD_REPORT: jumps after which a shader reports (LAA_DISPATCH_WARN) */
 /* id: the shader's address (what SHADER_GUARD_REPORT writes) */
 int shader_translate(const uint8_t *code, size_t size, int stage, const uint8_t *constants,
                      uint32_t constants_size, const uint8_t *control, int options, uint32_t extra_outputs,
