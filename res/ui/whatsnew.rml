@@ -1,0 +1,21 @@
+<rml>
+<head>
+    <title>What's New</title>
+    <link type="text/rcss" href="theme.rcss" />
+    <link type="text/rcss" href="window.rcss" />
+</head>
+<body>
+    <!-- Shown once after an update (ui.cpp: open_whats_new). Rewrite the notes for every release. -->
+    <window id="window" class="small news">
+        <heading class="window-title"><icon class="news" />What's New</heading>
+        <p id="news-version" class="hint" />
+        <news-list>
+            <news-item><dot />ZLAA can now check GitHub for a new version when it starts (Settings &gt; Interface &gt; Check for Updates).</news-item>
+            <news-item><dot />When one is out, "Update available" appears next to the version on the start screen. Choose it to download and install the update from inside the app.</news-item>        </news-list>
+        <menu-list>
+            <button id="news-ok">OK</button>
+            <button id="news-notes">Full Release Notes</button>
+        </menu-list>
+    </window>
+</body>
+</rml>

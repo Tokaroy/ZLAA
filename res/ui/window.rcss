@@ -336,3 +336,33 @@ menu-list button.danger:focus-visible {
     color: var(--night);
     background-color: var(--coral);
 }
+
+/* What's New: shown once after an update; a short list of the release's changes */
+window.news {
+    width: 560dp;
+}
+
+icon.news { decorator: text("&#xe88e;" center center); }
+
+news-list {
+    display: block;
+    margin-top: var(--gap-md);
+}
+
+news-item {
+    display: block;
+    position: relative;
+    padding-left: 20dp;
+    margin-bottom: var(--gap-sm);
+}
+
+news-item dot {
+    display: block;
+    position: absolute;
+    left: 4dp;
+    top: 9dp;
+    width: 7dp;
+    height: 7dp;
+    border-radius: 3.5dp;
+    background-color: var(--gold);
+}

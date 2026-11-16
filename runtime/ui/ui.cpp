@@ -178,7 +178,7 @@ System sys;
 Files files;
 SDL_Window *window;
 Rml::Context *context;
-Rml::ElementDocument *start_doc, *settings_doc, *pause_doc, *build_doc, *update_doc;
+Rml::ElementDocument *start_doc, *settings_doc, *pause_doc, *build_doc, *update_doc, *news_doc;
 int showing;                                             /* 0: no menu, 1: start screen, 2: pause menu */
 int update_asked;                                        /* the update check: 1 asked, 2 answered */
 std::string update_tag;                                  /* the newer release's tag ("v0.1.2") */
@@ -250,9 +250,34 @@ void poll_update_check() {
     start_doc->GetElementById("version-area")->SetClass("update", true);
 }
 
+void focus_first(Rml::ElementDocument *doc, const char *selector);
+
+/* ---- What's New (res/ui/whatsnew.rml): once, the first time the start screen opens after an update ----
+ * config "seen_version" = the last version the player saw it in. A new install (no config yet) only records the
+ * version. LAA_WHATS_NEW=1 shows it anyway (tests; with LAA_CONFIG=a test file). */
+void open_whats_new() {
+    bool force = getenv("LAA_WHATS_NEW") && atoi(getenv("LAA_WHATS_NEW"));
+    auto it = config.find("seen_version");
+    bool updated = it != config.end() ? it->second != LAA_VERSION : !config.empty();
+    if (!force && (it == config.end() || it->second != LAA_VERSION)) {
+        config["seen_version"] = LAA_VERSION;
+        save_config();
+    }
+    if (!force && !updated) return;
+    news_doc->GetElementById("news-version")->SetInnerRML(esc(std::string("ZLAA ") + LAA_VERSION));
+    news_doc->Show(Rml::ModalFlag::Modal, Rml::FocusFlag::None);
+    news_doc->GetElementById("window")->SetAttribute("open", "");
+    focus_first(news_doc, "#news-ok");
+}
+
+void close_whats_new() {
+    news_doc->GetElementById("window")->RemoveAttribute("open");
+    news_doc->Hide();
+    focus_first(start_doc, "#play");
+}
+
 /* ---- the update window (the badge, on Android): download, check, and Android's installer ---- */
 
-void focus_first(Rml::ElementDocument *doc, const char *selector);
 
 int update_shown_state = -1;
 
@@ -750,6 +775,7 @@ bool is_control(Rml::Element *e) {                      /* buttons and rows (the
 Rml::ElementDocument *top_doc() {                        /* the document the controller works in now */
     if (build_doc && build_doc->IsVisible()) return build_doc;
     if (update_doc && update_doc->IsVisible()) return update_doc;
+    if (news_doc && news_doc->IsVisible()) return news_doc;
     if (settings_doc && settings_doc->IsVisible()) return settings_doc;
     return showing == 2 ? pause_doc : start_doc;
 }
@@ -762,7 +788,7 @@ bool restore_focus() {
     if (is_control(f) && f->GetOwnerDocument() == doc) return false;
     Rml::Element *to = last_focus_doc == doc && !last_focus_id.empty() ? doc->GetElementById(last_focus_id) : NULL;
     if (!to || !to->IsVisible(true))
-        to = doc->QuerySelector(doc == build_doc ? "#build-go" : doc == update_doc ? "#update-go" : doc == settings_doc ? "row" : doc == pause_doc ? "#resume" : "#play");
+        to = doc->QuerySelector(doc == build_doc ? "#build-go" : doc == update_doc ? "#update-go" : doc == news_doc ? "#news-ok" : doc == settings_doc ? "row" : doc == pause_doc ? "#resume" : "#play");
     return to && to->Focus(true);
 }
 
@@ -793,6 +819,8 @@ public:
             if (id == "update-go") { update_go(); return; }
             if (id == "update-notes") { SDL_OpenURL(LAA_PROJECT_URL "/releases/latest"); return; }
             if (id == "update-back") { close_update(); return; }
+            if (id == "news-ok") { close_whats_new(); return; }
+            if (id == "news-notes") { SDL_OpenURL(LAA_PROJECT_URL "/releases/tag/v" LAA_VERSION); return; }
             if (id == "build-go") { build_go(); return; }
             if (id == "build-speed") {                    /* Cool -> Balanced -> Fast -> Cool */
                 config["LAA_BUILD_SPEED"] = std::to_string((build_speed() + 1) % 3);
@@ -840,6 +868,7 @@ void act(int action) {
     case UI_BACK:
         if (build_doc && build_doc->IsVisible()) close_build();
         else if (update_doc && update_doc->IsVisible()) close_update();
+        else if (news_doc && news_doc->IsVisible()) close_whats_new();
         else if (in_settings) close_settings();
         else if (showing == 2) result = UI_RESUME;
         break;
@@ -888,7 +917,8 @@ extern "C" int ui_init(void *sdl_window, const UiPaths *p) {
     pause_doc = load("pause.rml");
     build_doc = load("build.rml");
     update_doc = load("update.rml");
-    if (!start_doc || !settings_doc || !pause_doc || !build_doc || !update_doc) return -1;
+    news_doc = load("whatsnew.rml");
+    if (!start_doc || !settings_doc || !pause_doc || !build_doc || !update_doc || !news_doc) return -1;
     start_doc->GetElementById("version")->SetInnerRML(LAA_VERSION);
     return 0;
 }
@@ -901,6 +931,8 @@ extern "C" void ui_start_menu(void) {
     start_doc->Show();
     start_doc->SetClass("animate-in", true);
     focus_first(start_doc, "#play");
+    static bool news_checked;
+    if (!news_checked) { news_checked = true; open_whats_new(); }
 }
 
 extern "C" int ui_skip_start(void) {
