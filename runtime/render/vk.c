@@ -245,6 +245,9 @@ static int create_device(void) {
     features.features.shaderImageGatherExtended = supported.shaderImageGatherExtended;
     features.features.textureCompressionBC = supported.textureCompressionBC;
     features.features.textureCompressionASTC_LDR = supported.textureCompressionASTC_LDR;
+    /* (Maxwell shaders may write memory in any stage: STG/ATOM, and the debug reports of translate.c) */
+    features.features.fragmentStoresAndAtomics = supported.fragmentStoresAndAtomics;
+    features.features.vertexPipelineStoresAndAtomics = supported.vertexPipelineStoresAndAtomics;
     VkDeviceCreateInfo ci = { .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &features,
                               .queueCreateInfoCount = 1, .pQueueCreateInfos = &q,
                               .enabledExtensionCount = next, .ppEnabledExtensionNames = ext };
