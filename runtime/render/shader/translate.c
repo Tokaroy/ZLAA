@@ -17,6 +17,7 @@
  * here, once, by following the pushes along every path: each SYNC/BRK gets a fixed target.
  */
 #include "translate_internal.h"
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -860,20 +861,77 @@ static void emit_predicated(T *t, const Inst *in, uint32_t next_block) {
 #define DISPATCH_WARN 4096                           /* (SHADER_GUARD_REPORT: reported, not stopped) */
 
 uint64_t shader_guard_address;
+int shader_guard_regs[SHADER_GUARD_REGS] = { -1, -1, -1, -1, -1, -1, -1, -1 };   /* (LAA_GUARD_REGS) */
 uint32_t shader_stuck_every = 256;
 uint32_t shader_dispatch_limit = DISPATCH_LIMIT;     /* (LAA_DISPATCH_LIMIT: another limit, to see what it changes) */
+uint32_t shader_fs_dispatch_limit;                   /* (LAA_FS_DISPATCH_LIMIT: fragment shaders' own; 0: the same) */
+
+static uint32_t dispatch_limit(T *t) {
+    return t->stage == SHADER_FRAGMENT && shader_fs_dispatch_limit ? shader_fs_dispatch_limit : shader_dispatch_limit;
+}
 uint32_t shader_dispatch_warn = DISPATCH_WARN;       /* (LAA_DISPATCH_WARN: report shaders that go past n jumps) */
+
+/* each reporting shader's block start offsets (emit_program; render_guard_check asks), to print where a loop ran away */
+static struct { uint64_t id; uint32_t *at, n; } guard_blocks[4096];
+static int guard_nblocks;
+static pthread_mutex_t guard_blocks_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void shader_guard_remember_blocks(uint64_t id, uint32_t *at, uint32_t nblocks) {
+    pthread_mutex_lock(&guard_blocks_lock);
+    for (int i = 0; i < guard_nblocks; i++)
+        if (guard_blocks[i].id == id) { free(guard_blocks[i].at); guard_blocks[i].at = at; guard_blocks[i].n = nblocks; at = NULL; break; }
+    if (at && guard_nblocks < (int)(sizeof guard_blocks / sizeof guard_blocks[0])) {
+        guard_blocks[guard_nblocks].id = id;
+        guard_blocks[guard_nblocks].at = at;
+        guard_blocks[guard_nblocks++].n = nblocks;
+    } else if (at) free(at);
+    pthread_mutex_unlock(&guard_blocks_lock);
+}
+
+int64_t shader_guard_block_offset(uint64_t id, uint32_t block) {
+    int64_t r = -1;
+    pthread_mutex_lock(&guard_blocks_lock);
+    for (int i = 0; i < guard_nblocks; i++)
+        if (guard_blocks[i].id == id && block < guard_blocks[i].n) { r = guard_blocks[i].at[block]; break; }
+    pthread_mutex_unlock(&guard_blocks_lock);
+    return r;
+}
 
 /* SHADER_GUARD_REPORT: write id and reason in this shader's slot (shader.h); the runtime reads
  * and clears it (render_guard_check). Every invocation that gets here writes the same words. */
 static void report_guard(T *t, uint32_t reason) {
     if (!(t->options & SHADER_GUARD_REPORT) || !shader_guard_address) return;
-    uint64_t at = shader_guard_address + 16ull * shader_guard_slot(t->id);
+    uint64_t at = shader_guard_address + 4ull * SHADER_GUARD_WORDS * shader_guard_slot(t->id);
     uint32_t base = op2(t, SpvOpCompositeConstruct, t->t_v2u, cu(t, (uint32_t)at), cu(t, (uint32_t)(at >> 32)));
     uint32_t words[3] = { (uint32_t)t->id, (uint32_t)(t->id >> 32), reason };
     t->uses_pointers = 1;
     for (int k = 0; k < 3; k++)
         spv_op(&t->s, SEC_BODY, SpvOpStore, 4, word_ptr(t, base, 4u * (uint32_t)k), cu(t, words[k]), SpvMemoryAccessAlignedMask, 4);
+    if (reason != SHADER_GUARD_JUMPS) return;
+    /* the first invocation that ends here (word 3: 0 -> 1) writes where it was and what its registers held */
+    uint32_t first = spv_id(&t->s), done = spv_id(&t->s), old = spv_id(&t->s);
+    spv_op(&t->s, SEC_BODY, SpvOpAtomicCompareExchange, 8, t->t_u32, old, word_ptr(t, base, 12), cu(t, SpvScopeDevice),
+           cu(t, 0), cu(t, 0), cu(t, 1), cu(t, 0));
+    uint32_t is_first = op2(t, SpvOpIEqual, t->t_bool, old, cu(t, 0));
+    spv_op(&t->s, SEC_BODY, SpvOpSelectionMerge, 2, done, SpvSelectionControlMaskNone);
+    spv_op(&t->s, SEC_BODY, SpvOpBranchConditional, 3, is_first, first, done);
+    label(t, first);
+    uint32_t v[12], n = 0;
+    v[n++] = load(t, t->t_u32, t->pc_var);                       /* 4: the block it would run next */
+    for (uint32_t k = 0; k < 2; k++)                               /* 5, 6: the pixel (fragment) */
+        v[n++] = t->stage == SHADER_FRAGMENT
+                     ? op1(t, SpvOpConvertFToU, t->t_u32, load(t, t->t_f32, component_ptr(t, SpvStorageClassInput, frag_coord(t), k)))
+                     : cu(t, 0xFFFFFFFFu);
+    uint32_t preds = cu(t, 0);                                     /* 7: P0-P6 as bits */
+    for (int p = 0; p < PT; p++)
+        preds = op2(t, SpvOpBitwiseOr, t->t_u32, preds, op3(t, SpvOpSelect, t->t_u32, get_p(t, p), cu(t, 1u << p), cu(t, 0)));
+    v[n++] = preds;
+    for (int k = 0; k < SHADER_GUARD_REGS; k++)                    /* 8-15: the registers LAA_GUARD_REGS names */
+        v[n++] = shader_guard_regs[k] >= 0 ? get_u(t, shader_guard_regs[k]) : cu(t, 0xDEADBEEFu);
+    for (uint32_t k = 0; k < n; k++)
+        spv_op(&t->s, SEC_BODY, SpvOpStore, 4, word_ptr(t, base, 16u + 4u * k), v[k], SpvMemoryAccessAlignedMask, 4);
+    branch(t, done);
+    label(t, done);
 }
 
 static void emit_program(T *t) {
@@ -899,7 +957,7 @@ static void emit_program(T *t) {
         /* report a loop early (DISPATCH_WARN jumps): a wrong loop over a whole screen of pixels gets
          * the GPU reset long before any pixel reaches DISPATCH_LIMIT, and its reports with it */
         uint32_t warn = spv_id(&t->s), go_on = spv_id(&t->s);
-        uint32_t warn_at = shader_dispatch_limit > shader_dispatch_warn ? shader_dispatch_warn : shader_dispatch_limit / 2;
+        uint32_t warn_at = dispatch_limit(t) > shader_dispatch_warn ? shader_dispatch_warn : dispatch_limit(t) / 2;
         uint32_t cond = op2(t, SpvOpIEqual, t->t_bool, load(t, t->t_u32, jumps_var), cu(t, warn_at));
         spv_op(&t->s, SEC_BODY, SpvOpSelectionMerge, 2, go_on, SpvSelectionControlMaskNone);
         spv_op(&t->s, SEC_BODY, SpvOpBranchConditional, 3, cond, warn, go_on);
@@ -958,9 +1016,16 @@ static void emit_program(T *t) {
     label(t, t->loop_continue);                      /* jumps++; on to the next block, or out after too many */
     uint32_t jumps = op2(t, SpvOpIAdd, t->t_u32, load(t, t->t_u32, jumps_var), cu(t, 1));
     store(t, jumps_var, jumps);
-    spv_op(&t->s, SEC_BODY, SpvOpBranchConditional, 3, op2(t, SpvOpULessThan, t->t_bool, jumps, cu(t, shader_dispatch_limit)), header, merge);
+    uint32_t more = op2(t, SpvOpULessThan, t->t_bool, jumps, cu(t, dispatch_limit(t)));
+    spv_op(&t->s, SEC_BODY, SpvOpBranchConditional, 3, more, header, merge);
     label(t, merge);
     report_guard(t, SHADER_GUARD_JUMPS);
+    if ((t->options & SHADER_GUARD_REPORT) && shader_guard_address) {   /* (block numbers -> code offsets, for the report) */
+        uint32_t *at = malloc(t->nblocks * sizeof *at);
+        for (uint32_t i = 0; i < t->ninst; i++)
+            if (t->inst[i].leader) at[t->block_of[i]] = t->inst[i].pc;
+        shader_guard_remember_blocks(t->id, at, t->nblocks);
+    }
     emit_outputs_at_exit(t);
     spv_op(&t->s, SEC_BODY, SpvOpReturn, 0);
     t->terminated = 1;

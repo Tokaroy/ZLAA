@@ -70,14 +70,23 @@ enum { SHADER_GL_DEPTH = 1,         /* vertex: clip-space z is -w..w (OpenGL/NVN
                                       * results dropped) instead of ending it: quad operations after a KIL
                                       * then never wait on a pixel that is gone */
 extern uint64_t shader_capture_address;   /* a GPU address (buffer device address) */
-/* SHADER_GUARD_REPORT: SHADER_GUARD_SLOTS slots of 4 words (id low, id high, reason, 0); a shader's
- * slot is shader_guard_slot(id); reason SHADER_GUARD_NO_BLOCK, _JUMPS (ended) or _LONG (4096 jumps: warned) */
+/* SHADER_GUARD_REPORT: SHADER_GUARD_SLOTS slots of SHADER_GUARD_WORDS words (id low, id high, reason, taken); a
+ * shader's slot is shader_guard_slot(id); reason SHADER_GUARD_NO_BLOCK, _JUMPS (ended) or _LONG (4096 jumps: warned).
+ * At _JUMPS the first invocation (taken 0 -> 1) also writes: 4 its next block, 5-6 its pixel, 7 P0-P6 as bits,
+ * 8-15 the registers shader_guard_regs names (LAA_GUARD_REGS=8,23,...; -1: none) */
 #define SHADER_GUARD_SLOTS 1024
+#define SHADER_GUARD_WORDS 16
+#define SHADER_GUARD_REGS 8
+extern int shader_guard_regs[SHADER_GUARD_REGS];
+/* the translator remembers each reporting shader's block start offsets (it owns `at`); the runtime asks */
+void shader_guard_remember_blocks(uint64_t id, uint32_t *at, uint32_t nblocks);
+int64_t shader_guard_block_offset(uint64_t id, uint32_t block);
 enum { SHADER_GUARD_NO_BLOCK = 1, SHADER_GUARD_JUMPS = 2, SHADER_GUARD_LONG = 3 };
 static inline uint32_t shader_guard_slot(uint64_t id) { return (uint32_t)((id >> 4) * 0x9E3779B1u >> 22) & (SHADER_GUARD_SLOTS - 1); }
 extern uint64_t shader_guard_address;
 extern uint32_t shader_stuck_every;      /* (SHADER_DEBUG_STUCK; a power of two) */
 extern uint32_t shader_dispatch_limit;   /* jumps one invocation may make before the shader is ended (translate.c; LAA_DISPATCH_LIMIT) */
+extern uint32_t shader_fs_dispatch_limit; /* fragment shaders' own limit, 0: the same (LAA_FS_DISPATCH_LIMIT) */
 extern uint32_t shader_dispatch_warn;    /* with SHADER_GUARD_REPORT: jumps after which a shader reports (LAA_DISPATCH_WARN) */
 /* id: the shader's address (what SHADER_GUARD_REPORT writes) */
 int shader_translate(const uint8_t *code, size_t size, int stage, const uint8_t *constants,

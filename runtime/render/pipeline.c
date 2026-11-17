@@ -62,25 +62,49 @@ void render_guard_init(void) {                       /* (before any shader is tr
         if (shader_dispatch_limit < 16) shader_dispatch_limit = 16;
         fprintf(stderr, "render: LAA_DISPATCH_LIMIT: shaders end after %u jumps\n", shader_dispatch_limit);
     }
+    if (getenv("LAA_FS_DISPATCH_LIMIT")) {           /* (fragment shaders only) */
+        shader_fs_dispatch_limit = (uint32_t)strtoul(getenv("LAA_FS_DISPATCH_LIMIT"), NULL, 0);
+        if (shader_fs_dispatch_limit < 16) shader_fs_dispatch_limit = 16;
+        fprintf(stderr, "render: LAA_FS_DISPATCH_LIMIT: fragment shaders end after %u jumps\n", shader_fs_dispatch_limit);
+    }
     if (getenv("LAA_DISPATCH_WARN")) {               /* (with LAA_SHADER_GUARD: how many jumps real shaders need) */
         shader_dispatch_warn = (uint32_t)strtoul(getenv("LAA_DISPATCH_WARN"), NULL, 0);
         if (shader_dispatch_warn < 2) shader_dispatch_warn = 2;
     }
+    if (getenv("LAA_GUARD_REGS")) {                  /* (registers a runaway invocation reports: "8,23,25") */
+        const char *p = getenv("LAA_GUARD_REGS");
+        for (int k = 0; k < SHADER_GUARD_REGS && *p; k++) {
+            char *end;
+            shader_guard_regs[k] = (int)strtol(p, &end, 0);
+            if (end == p) break;
+            p = *end == ',' ? end + 1 : end;
+        }
+    }
     if (!getenv("LAA_SHADER_GUARD")) return;
-    guard_ptr = debug_buffer(16 * SHADER_GUARD_SLOTS, &guard_buffer, &shader_guard_address);
-    memset((void *)guard_ptr, 0, 16 * SHADER_GUARD_SLOTS);
+    guard_ptr = debug_buffer(4 * SHADER_GUARD_WORDS * SHADER_GUARD_SLOTS, &guard_buffer, &shader_guard_address);
+    memset((void *)guard_ptr, 0, 4 * SHADER_GUARD_WORDS * SHADER_GUARD_SLOTS);
     fprintf(stderr, "render: LAA_SHADER_GUARD: shaders report hitting the dispatch guard\n");
 }
 
 void render_guard_check(uint64_t frame) {
     if (!guard_ptr) return;
     for (int i = 0; i < SHADER_GUARD_SLOTS; i++) {
-        volatile uint32_t *e = guard_ptr + 4 * i;
+        volatile uint32_t *e = guard_ptr + SHADER_GUARD_WORDS * i;
         if (!e[2]) continue;
         uint64_t id = e[0] | (uint64_t)e[1] << 32;
         fprintf(stderr, "render: frame %llu: shader %#llx hit the dispatch guard: %s\n", (unsigned long long)frame,
                 (unsigned long long)id, e[2] == SHADER_GUARD_NO_BLOCK ? "jump to no block" : e[2] == SHADER_GUARD_JUMPS ? "too many jumps (a loop that never ends)"
                                                      : "many jumps in one invocation (a loop running long)");
+        if (e[3]) {                                  /* (the first runaway invocation: where it was, its values) */
+            char regs[256];
+            int n = 0;
+            for (int k = 0; k < SHADER_GUARD_REGS && shader_guard_regs[k] >= 0; k++)
+                n += snprintf(regs + n, sizeof regs - n, " R%d=%#x", shader_guard_regs[k], e[8 + k]);
+            regs[n] = 0;
+            fprintf(stderr, "render:   at block %u (code %#llx), pixel %u,%u, P0-6 %#x,%s\n", e[4],
+                    (long long)shader_guard_block_offset(id, e[4]), e[5], e[6], e[7], n ? regs : " (LAA_GUARD_REGS: none)");
+            e[3] = 0;
+        }
         e[2] = 0;
     }
 }
@@ -126,7 +150,12 @@ static HostShader *make_shader(uint64_t code, uint64_t control, int stage, uint3
         static int full_half = -1;                   /* LAA_FULL_HALF=1: packed halves in full precision */
         if (full_half < 0) full_half = getenv("LAA_FULL_HALF") != NULL;
         if (full_half) options |= SHADER_FULL_HALF;
-        if (shader_guard_address) options |= SHADER_GUARD_REPORT;
+        static int guard_stage = -2;                 /* LAA_GUARD_STAGE=fs|cs: the guard report in that stage only */
+        if (guard_stage == -2) {
+            const char *g = getenv("LAA_GUARD_STAGE");
+            guard_stage = !g ? -1 : !strcmp(g, "fs") ? SHADER_FRAGMENT : !strcmp(g, "cs") ? SHADER_COMPUTE : -1;
+        }
+        if (shader_guard_address && (guard_stage < 0 || stage == guard_stage)) options |= SHADER_GUARD_REPORT;
         static int demote = -1;                      /* LAA_KIL_DEMOTE=1: KIL as demote-to-helper (GPU hang test) */
         if (demote < 0) demote = getenv("LAA_KIL_DEMOTE") && atoi(getenv("LAA_KIL_DEMOTE")) && vk.demote;
         if (demote && stage == SHADER_FRAGMENT) options |= SHADER_KIL_DEMOTE;
