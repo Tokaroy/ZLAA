@@ -178,7 +178,37 @@ static HostShader *make_shader(uint64_t code, uint64_t control, int stage, uint3
             if (getenv("LAA_STUCK_EVERY")) shader_stuck_every = (uint32_t)strtoul(getenv("LAA_STUCK_EVERY"), NULL, 0);
             options |= SHADER_DEBUG_STUCK;
         }
-        int ok = shader_translate(p, avail, stage, p + c_off, c_size, control ? gptr(control) : NULL, options, extra_outputs, code, &s->info) == 0;
+        /* LAA_PATCH=shader:offset=word,shader:offset=word (hex; offset as tools/maxwell_dis.py prints it, after the
+         * 0x80-byte header of graphics stages): those instruction words replaced before translation (GPU hang tests) */
+        uint8_t *patched = NULL;
+        const char *patch = getenv("LAA_PATCH");
+        for (const char *q = patch; q && *q; ) {
+            char *e;
+            uint64_t sh = strtoull(q, &e, 16), off = 0, word = 0;
+            if (*e == ':') off = strtoull(e + 1, &e, 16);
+            if (*e == '=') word = strtoull(e + 1, &e, 16);
+            uint64_t at = off + (stage == SHADER_COMPUTE ? 0 : 0x80);
+            if (sh == code && at + 8 <= avail) {
+                if (!patched) {
+                    uint64_t n = avail < 0x40000 ? avail : 0x40000;
+                    patched = malloc(n);
+                    memcpy(patched, p, n);
+                    avail = n;
+                }
+                if (at + 8 <= avail) {
+                    uint64_t old;
+                    memcpy(&old, patched + at, 8);
+                    memcpy(patched + at, &word, 8);
+                    fprintf(stderr, "render: shader %#llx: word at %#llx %016llx -> %016llx\n", (unsigned long long)code,
+                            (unsigned long long)off, (unsigned long long)old, (unsigned long long)word);
+                }
+            }
+            q = strchr(e, ',');
+            if (q) q++;
+        }
+        const uint8_t *src = patched ? patched : p;
+        int ok = shader_translate(src, avail, stage, p + c_off, c_size, control ? gptr(control) : NULL, options, extra_outputs, code, &s->info) == 0;
+        free(patched);
         if (ok && s->info.ntextures > RENDER_LAYOUT_TEXTURES) {   /* (not in the set layout: never seen so far) */
             snprintf(s->info.error, sizeof s->info.error, "%u textures, the layout has %d", s->info.ntextures, RENDER_LAYOUT_TEXTURES);
             fprintf(stderr, "render: shader %#llx: %s\n", (unsigned long long)code, s->info.error);
