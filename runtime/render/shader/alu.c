@@ -511,7 +511,11 @@ int emit_alu(T *t, const Inst *in) {
         uint32_t b = operand_b(t, in, 0);
         if (avg == 2) a = ineg(t, a);
         if (avg == 1) b = ineg(t, b);
-        set_u(t, rd, iadd(t, a, b));
+        uint32_t r = iadd(t, a, b);
+        /* .CC: the carry for a following IADD.X (64-bit addresses: ISCADD.CC lo, IADD.X hi). Without it the high
+         * word took a stale carry: an LDG could read 4 GiB off */
+        if (bit(w, is32 ? 52 : 47)) set_add_flags(t, r, a, b, 0);
+        set_u(t, rd, r);
         return 1;
     }
     case OP_XMADR: case OP_XMADI: case OP_XMADC: case OP_XMADRC: {
