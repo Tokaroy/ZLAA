@@ -501,6 +501,52 @@ static uint32_t hash(const void *p, size_t n) {
     return h;
 }
 
+/* LAA_PIPE_STATS=fs,fs (hex) or all: the driver's statistics of pipelines with those fragment shaders (registers,
+ * spills, private memory: beach freeze test) */
+static int pipe_stats_wanted(uint64_t fs) {
+    const char *list = getenv("LAA_PIPE_STATS");
+    if (!vk.pipe_stats || !list) return 0;
+    if (!strcmp(list, "all")) return 1;
+    for (const char *s = list; *s; ) {
+        char *end;
+        if (strtoull(s, &end, 16) == fs) return 1;
+        if (end == s) break;
+        s = *end == ',' ? end + 1 : end;
+    }
+    return 0;
+}
+
+static void log_pipe_stats(VkPipeline p, uint64_t vs, uint64_t fs) {
+    PFN_vkGetPipelineExecutablePropertiesKHR props_fn = (PFN_vkGetPipelineExecutablePropertiesKHR)
+        vkGetDeviceProcAddr(vk.device, "vkGetPipelineExecutablePropertiesKHR");
+    PFN_vkGetPipelineExecutableStatisticsKHR stats_fn = (PFN_vkGetPipelineExecutableStatisticsKHR)
+        vkGetDeviceProcAddr(vk.device, "vkGetPipelineExecutableStatisticsKHR");
+    if (!props_fn || !stats_fn) return;
+    VkPipelineInfoKHR pi = { .sType = VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR, .pipeline = p };
+    VkPipelineExecutablePropertiesKHR ex[4];
+    uint32_t nex = 4;
+    for (uint32_t i = 0; i < nex; i++) ex[i] = (VkPipelineExecutablePropertiesKHR){ .sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR };
+    if (props_fn(vk.device, &pi, &nex, ex) < 0) return;
+    for (uint32_t e = 0; e < nex; e++) {
+        VkPipelineExecutableInfoKHR ei = { .sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR, .pipeline = p, .executableIndex = e };
+        VkPipelineExecutableStatisticKHR st[48];
+        uint32_t nst = 48;
+        for (uint32_t i = 0; i < nst; i++) st[i] = (VkPipelineExecutableStatisticKHR){ .sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR };
+        if (stats_fn(vk.device, &ei, &nst, st) < 0) continue;
+        char line[2048];
+        int n = snprintf(line, sizeof line, "render: stats vs %#llx fs %#llx %s (subgroup %u):", (unsigned long long)vs,
+                         (unsigned long long)fs, ex[e].name, ex[e].subgroupSize);
+        for (uint32_t i = 0; i < nst && n < (int)sizeof line - 80; i++) {
+            const VkPipelineExecutableStatisticKHR *s = &st[i];
+            if (s->format == VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR) n += snprintf(line + n, sizeof line - n, " %s=%u", s->name, s->value.b32);
+            else if (s->format == VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR) n += snprintf(line + n, sizeof line - n, " %s=%lld", s->name, (long long)s->value.i64);
+            else if (s->format == VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR) n += snprintf(line + n, sizeof line - n, " %s=%llu", s->name, (unsigned long long)s->value.u64);
+            else n += snprintf(line + n, sizeof line - n, " %s=%g", s->name, s->value.f64);
+        }
+        fprintf(stderr, "%s\n", line);
+    }
+}
+
 static VkPipeline create(const PipelineKey *k) {
     VkPipelineShaderStageCreateInfo stages[2] = {
         { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,
@@ -600,6 +646,8 @@ static VkPipeline create(const PipelineKey *k) {
             fprintf(stderr, "render:   attribute %u: format %d (nvn %#x) stream %u offset %u, stride %u; color format %d\n",
                     attrs[i].location, attrs[i].format, k->attr[attrs[i].location].format, attrs[i].binding,
                     attrs[i].offset, k->stream[attrs[i].binding].stride, k->color_format[0]);
+    int stats = pipe_stats_wanted(k->fs_code);
+    if (stats) ci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
     VkPipeline p;
     VkResult r = vkCreateGraphicsPipelines(vk.device, vk.pipeline_cache, 1, &ci, NULL, &p);
     if (r != VK_SUCCESS) {           /* the driver refused it: its draws are skipped (counted as "other") */
@@ -607,6 +655,7 @@ static VkPipeline create(const PipelineKey *k) {
                 (unsigned long long)k->vs_code, (unsigned long long)k->fs_code, vk_result_name(r));
         return VK_NULL_HANDLE;
     }
+    if (stats) log_pipe_stats(p, k->vs_code, k->fs_code);
     return p;
 }
 

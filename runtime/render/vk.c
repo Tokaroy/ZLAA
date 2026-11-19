@@ -46,7 +46,11 @@ const char *vk_result_name(VkResult r) {
     case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
     case VK_ERROR_OUT_OF_DATE_KHR: return "VK_ERROR_OUT_OF_DATE_KHR";
     case VK_ERROR_SURFACE_LOST_KHR: return "VK_ERROR_SURFACE_LOST_KHR";
-    default: return "(other VkResult)";
+    default: {
+        static _Thread_local char name[32];
+        snprintf(name, sizeof name, "(VkResult %d)", (int)r);
+        return name;
+    }
     }
 }
 
@@ -211,7 +215,7 @@ static int create_device(void) {
     VkDeviceQueueCreateInfo q = { .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                                   .queueFamilyIndex = vk.queue_family, .queueCount = 1,
                                   .pQueuePriorities = &priority };
-    const char *ext[4] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    const char *ext[6] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     uint32_t next = 1;
     /* how the GPU gets at the game's memory pools (buffer.c); LAA_POOL_EXPORT=1 tries Android's way on desktop */
     if (has_extension(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME) && !getenv("LAA_POOL_EXPORT")) {
@@ -239,6 +243,15 @@ static int create_device(void) {
                                              .pNext = &v11, .bufferDeviceAddress = VK_TRUE,
                                              .timelineSemaphore = VK_TRUE };   /* (submit.c) */
     VkPhysicalDeviceFeatures2 features = { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &v12 };
+    /* LAA_PIPE_STATS=fs,...: the driver's statistics of those pipelines (registers, spills; pipeline.c) */
+    VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pexec = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR, .pipelineExecutableInfo = VK_TRUE };
+    if (getenv("LAA_PIPE_STATS") && has_extension(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME)) {
+        ext[next++] = VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME;
+        pexec.pNext = features.pNext;
+        features.pNext = &pexec;
+        vk.pipe_stats = 1;
+    }
     VkPhysicalDeviceFeatures supported;
     vkGetPhysicalDeviceFeatures(vk.gpu, &supported);
     features.features.shaderInt64 = supported.shaderInt64;
