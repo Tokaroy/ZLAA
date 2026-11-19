@@ -162,6 +162,9 @@ static HostShader *make_shader(uint64_t code, uint64_t control, int stage, uint3
         static int no_quad = -1;                     /* LAA_NO_QUAD=1: SHFL without lane exchanges (GPU hang test) */
         if (no_quad < 0) no_quad = getenv("LAA_NO_QUAD") && atoi(getenv("LAA_NO_QUAD"));
         if (no_quad) options |= SHADER_DEBUG_NO_QUAD;
+        static int dispatch_loop = -1;               /* LAA_DISPATCH_LOOP=1: jumps as the old dispatch loop (comparisons) */
+        if (dispatch_loop < 0) dispatch_loop = getenv("LAA_DISPATCH_LOOP") && atoi(getenv("LAA_DISPATCH_LOOP"));
+        if (dispatch_loop) options |= SHADER_DISPATCH_LOOP;
         if (!ahead && stage == SHADER_VERTEX && getenv("LAA_DEBUG_VS") && strtoull(getenv("LAA_DEBUG_VS"), NULL, 0) == code) {
             if (!capture_buffer) make_capture_buffer();
             options |= SHADER_DEBUG_CAPTURE;

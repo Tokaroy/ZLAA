@@ -38,6 +38,7 @@ typedef struct {
     uint32_t inputs, outputs;        /* generic attribute / varying locations used (bit i) */
     uint32_t color_outputs;          /* fragment: render targets written (bit i) */
     int writes_depth, discards;
+    int structured;                  /* jumps written as loops and ifs (else the dispatch loop, or no jumps) */
     uint32_t local_size[3];          /* compute: threads per workgroup */
     ShaderTexture textures[SHADER_MAX_TEXTURES];
     uint32_t ntextures;              /* binding = base + SHADER_TEXTURE_BINDING + index */
@@ -67,8 +68,10 @@ enum { SHADER_GL_DEPTH = 1,         /* vertex: clip-space z is -w..w (OpenGL/NVN
        SHADER_KIL_DEMOTE = 128,      /* fragment: KIL demotes the pixel to a helper (it carries on, its results
                                       * dropped) instead of ending it: quad operations after a KIL then never wait
                                       * on a pixel that is gone */
-       SHADER_DEBUG_NO_QUAD = 256 }; /* (debugging, GPU hang test) SHFL gives each lane its own value: no
+       SHADER_DEBUG_NO_QUAD = 256,   /* (debugging, GPU hang test) SHFL gives each lane its own value: no
                                       * exchange between lanes (pictures may be off where the game uses it) */
+       SHADER_DISPATCH_LOOP = 512 }; /* jumps as the old dispatch loop (pc + switch in a loop) instead of
+                                      * structured if/loop (translate.c structure()); for comparisons */
 extern uint64_t shader_capture_address;   /* a GPU address (buffer device address) */
 /* SHADER_GUARD_REPORT: SHADER_GUARD_SLOTS slots of SHADER_GUARD_WORDS words (id low, id high, reason, taken); a
  * shader's slot is shader_guard_slot(id); reason SHADER_GUARD_NO_BLOCK, _JUMPS (ended) or _LONG (4096 jumps: warned).

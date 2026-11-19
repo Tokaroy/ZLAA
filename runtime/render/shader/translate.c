@@ -5,7 +5,9 @@
  * Control flow. SPIR-V only allows "structured" control flow (if/else, loops, switch, each
  * with a declared merge point), while Maxwell code jumps freely. So:
  *   - a shader with no jumps is emitted straight;
- *   - otherwise we cut it into basic blocks and emit
+ *   - otherwise we cut it into basic blocks and write them as real loops and ifs ("structured
+ *     control flow" below: the Adreno compiler makes much better code of it);
+ *   - code that can't be written so (jump tables, irreducible jumps; LAA_DISPATCH_LOOP=1 for all) is
  *         pc = 0; loop { switch (pc) { case 0: ...; pc = 3; break; case 1: ... } }
  *     which is structured whatever the jumps are. Each block ends by setting pc. A pc that is no
  *     block, or more than DISPATCH_LIMIT jumps in one invocation, ends the shader (writing its
@@ -934,11 +936,345 @@ static void report_guard(T *t, uint32_t reason) {
     label(t, done);
 }
 
+/* ================================================================ structured control flow
+ *
+ * Jumps become real loops and if/else (the Adreno compiler hung the GPU on the dispatch loop below in
+ * some light shaders), following N. Ramsey, "Beyond Relooper" (2022): blocks in reverse postorder, the
+ * dominator tree; a block that jumps back to it is a loop header (a SPIR-V loop: "continue" there), a block
+ * reached from two or more places ends a "block" construct (a SPIR-V loop run once: "break" there), any
+ * other block is written where it is jumped to. SPIR-V only breaks out of the innermost loop: a jump
+ * further out sets `pend` to its construct and breaks level by level (cascade()). Loops count their turns
+ * against the dispatch limit, as before: a wrong translation still can't loop forever. Code that isn't
+ * reducible (can't be written with loops and ifs) and jump tables (BRX) keep the dispatch loop. */
+
+enum { END_FALL, END_JUMP, END_COND, END_RET };
+enum { CTX_BLOCK, CTX_LOOP, CTX_IF };
+typedef struct {
+    int kind, node;
+    int cascade;                     /* jumps further out pass its merge: the outermost one's index in ctx + 1 */
+    uint32_t id, header, merge, cont;
+} Ctx;
+typedef struct {
+    T *t;
+    int nb;
+    int *first, *last, *end, *target, *next;  /* per block: instructions, how it ends, where to (-1: the end) */
+    int *rpo, *order, *idom, *loop_header, *merge_node, *nkids, **kids;
+    Ctx *ctx;
+    int nctx, ctx_cap;
+    uint32_t pend_var, jumps_var, next_id;
+} Sx;
+
+static int is_jump(MaxwellOp op) { return op == OP_BRA || op == OP_SYNC || op == OP_BRK || op == OP_CONT; }
+
+static int sx_dominates(Sx *x, int a, int b) {           /* (a dominates b) */
+    for (;;) {
+        if (a == b) return 1;
+        if (b == 0) return 0;
+        b = x->idom[b];
+    }
+}
+
+/* the CFG analysis; 0 if the code can be written structured */
+static int sx_analyse(Sx *x) {
+    T *t = x->t;
+    int nb = x->nb = (int)t->nblocks;
+    x->first = malloc(nb * sizeof(int)); x->last = malloc(nb * sizeof(int));
+    x->end = malloc(nb * sizeof(int)); x->target = malloc(nb * sizeof(int)); x->next = malloc(nb * sizeof(int));
+    for (uint32_t i = 0; i < t->ninst; i++) {
+        if (t->inst[i].op == OP_BRX) return -1;
+        int b = t->block_of[i];
+        if (t->inst[i].leader) x->first[b] = (int)i;
+        x->last[b] = (int)i;
+    }
+    int kil_ends = !(t->options & (SHADER_DEBUG_CONST | SHADER_KIL_DEMOTE));
+    for (int b = 0; b < nb; b++) {
+        x->end[b] = END_FALL;
+        x->next[b] = b + 1 < nb ? b + 1 : -1;
+        x->target[b] = -1;
+        for (int i = x->first[b]; i <= x->last[b]; i++) {
+            const Inst *in = &t->inst[i];
+            if ((in->op == OP_EXIT || (in->op == OP_KIL && kil_ends)) && predicate_always(in->w)) { x->end[b] = END_RET; break; }
+        }
+        const Inst *in = &t->inst[x->last[b]];
+        if (x->end[b] == END_FALL && is_jump(in->op) && !(bits(in->w, 16, 3) == PT && bit(in->w, 19))) {
+            x->target[b] = in->target;
+            x->end[b] = predicate_always(in->w) ? END_JUMP : END_COND;
+            if (x->end[b] == END_COND && x->target[b] == x->next[b]) x->end[b] = END_FALL;
+        }
+    }
+    /* successors, depth-first postorder from block 0 */
+    int (*succ)[2] = malloc(nb * sizeof *succ), *nsucc = calloc(nb, sizeof(int));
+    for (int b = 0; b < nb; b++) {
+        if (x->end[b] == END_JUMP) succ[b][nsucc[b]++] = x->target[b];
+        else if (x->end[b] == END_FALL) { if (x->next[b] >= 0) succ[b][nsucc[b]++] = x->next[b]; }
+        else if (x->end[b] == END_COND) {
+            succ[b][nsucc[b]++] = x->target[b];
+            if (x->next[b] >= 0) succ[b][nsucc[b]++] = x->next[b];
+        }
+    }
+    x->rpo = malloc(nb * sizeof(int)); x->order = malloc(nb * sizeof(int));
+    for (int b = 0; b < nb; b++) x->rpo[b] = -1;
+    int *stack = malloc(nb * sizeof(int)), *at = calloc(nb, sizeof(int)), *seen = calloc(nb, sizeof(int));
+    int *post = malloc(nb * sizeof(int)), nstack = 0, npost = 0;
+    stack[nstack++] = 0; seen[0] = 1;
+    while (nstack) {
+        int b = stack[nstack - 1];
+        if (at[b] < nsucc[b]) {
+            int s = succ[b][at[b]++];
+            if (!seen[s]) { seen[s] = 1; stack[nstack++] = s; }
+        } else {
+            post[npost++] = b;
+            nstack--;
+        }
+    }
+    for (int i = 0; i < npost; i++) { x->order[i] = post[npost - 1 - i]; x->rpo[x->order[i]] = i; }
+    int nreach = npost;
+    /* dominators (Cooper, Harvey, Kennedy) */
+    x->idom = malloc(nb * sizeof(int));
+    for (int b = 0; b < nb; b++) x->idom[b] = -1;
+    x->idom[0] = 0;
+    for (int changed = 1; changed; ) {
+        changed = 0;
+        for (int i = 1; i < nreach; i++) {
+            int b = x->order[i], best = -1;
+            for (int p = 0; p < nb; p++) {                /* (predecessors: blocks with b as a successor) */
+                if (x->rpo[p] < 0 || x->idom[p] < 0) continue;
+                for (int k = 0; k < nsucc[p]; k++) {
+                    if (succ[p][k] != b) continue;
+                    if (best < 0) { best = p; continue; }
+                    int a1 = p, a2 = best;
+                    while (a1 != a2) {
+                        while (x->rpo[a1] > x->rpo[a2]) a1 = x->idom[a1];
+                        while (x->rpo[a2] > x->rpo[a1]) a2 = x->idom[a2];
+                    }
+                    best = a1;
+                }
+            }
+            if (best >= 0 && x->idom[b] != best) { x->idom[b] = best; changed = 1; }
+        }
+    }
+    /* back edges must go to a block that dominates their source (reducible); loop headers, merge nodes */
+    x->loop_header = calloc(nb, sizeof(int)); x->merge_node = calloc(nb, sizeof(int));
+    int *forward_in = calloc(nb, sizeof(int)), ok = 1;
+    for (int u = 0; u < nb && ok; u++) {
+        if (x->rpo[u] < 0) continue;
+        for (int k = 0; k < nsucc[u]; k++) {
+            int v = succ[u][k];
+            if (x->rpo[v] <= x->rpo[u]) {
+                if (!sx_dominates(x, v, u)) { ok = 0; break; }
+                x->loop_header[v] = 1;
+            } else forward_in[v]++;
+        }
+    }
+    x->nkids = calloc(nb, sizeof(int)); x->kids = calloc(nb, sizeof(int *));
+    for (int i = 1; ok && i < nreach; i++) {             /* (in reverse postorder: each list ascending) */
+        int b = x->order[i];
+        x->merge_node[b] = forward_in[b] >= 2;
+        if (!x->merge_node[b]) continue;
+        int d = x->idom[b];
+        x->kids[d] = realloc(x->kids[d], (x->nkids[d] + 1) * sizeof(int));
+        x->kids[d][x->nkids[d]++] = b;
+    }
+    free(succ); free(nsucc); free(stack); free(at); free(seen); free(post); free(forward_in);
+    return ok ? 0 : -1;
+}
+
+static void sx_free(Sx *x) {
+    free(x->first); free(x->last); free(x->end); free(x->target); free(x->next);
+    free(x->rpo); free(x->order); free(x->idom); free(x->loop_header); free(x->merge_node);
+    if (x->kids) for (int b = 0; b < x->nb; b++) free(x->kids[b]);
+    free(x->kids); free(x->nkids); free(x->ctx);
+}
+
+static void sx_unreachable(T *t, uint32_t id) {
+    label(t, id);
+    spv_op(&t->s, SEC_BODY, SpvOpUnreachable, 0);
+    t->terminated = 1;
+}
+
+/* open a construct: a SPIR-V loop (CTX_BLOCK runs once: its continue block is never reached) */
+static Ctx *sx_open(Sx *x, int kind, int node) {
+    T *t = x->t;
+    if (x->nctx == x->ctx_cap) x->ctx = realloc(x->ctx, (x->ctx_cap = x->ctx_cap * 2 + 16) * sizeof *x->ctx);
+    Ctx *c = &x->ctx[x->nctx++];
+    *c = (Ctx){ .kind = kind, .node = node, .id = ++x->next_id, .header = spv_id(&t->s), .merge = spv_id(&t->s),
+                .cont = spv_id(&t->s) };
+    uint32_t body = spv_id(&t->s);
+    branch(t, c->header);
+    label(t, c->header);
+    spv_op(&t->s, SEC_BODY, SpvOpLoopMerge, 3, c->merge, c->cont, SpvLoopControlMaskNone);
+    branch(t, body);
+    label(t, body);
+    return c;
+}
+
+static void sx_cascade(Sx *x, int outermost);
+
+/* close the innermost construct: its continue block, then its merge; `follows`: code comes after it */
+static void sx_close(Sx *x, int follows) {
+    T *t = x->t;
+    Ctx c = x->ctx[--x->nctx];
+    label(t, c.cont);                                    /* (a block's: never reached) */
+    branch(t, c.header);
+    label(t, c.merge);
+    if (c.cascade) sx_cascade(x, c.cascade - 1);
+    if (!follows) { spv_op(&t->s, SEC_BODY, SpvOpUnreachable, 0); t->terminated = 1; }
+}
+
+static int sx_innermost_loop(Sx *x) {
+    for (int i = x->nctx - 1; i >= 0; i--)
+        if (x->ctx[i].kind != CTX_IF) return i;
+    return -1;
+}
+
+/* jump to construct k: continue a loop / leave a block */
+static void sx_jump(Sx *x, int k) {
+    T *t = x->t;
+    int l = sx_innermost_loop(x);
+    if (l == k) { branch(t, x->ctx[k].kind == CTX_LOOP ? x->ctx[k].cont : x->ctx[k].merge); return; }
+    if (l < 0) { fail(t, "structured jump outside every construct"); return; }
+    if (!x->pend_var) x->pend_var = local_var(t, t->t_u32, cu(t, 0));
+    store(t, x->pend_var, cu(t, x->ctx[k].id));
+    if (!x->ctx[l].cascade || x->ctx[l].cascade > k + 1) x->ctx[l].cascade = k + 1;
+    branch(t, x->ctx[l].merge);
+}
+
+/* at a construct's merge (it is closed): a jump still on its way out goes on */
+static void sx_cascade(Sx *x, int outermost) {
+    T *t = x->t;
+    uint32_t go = spv_id(&t->s), normal = spv_id(&t->s);
+    uint32_t pending = op2(t, SpvOpINotEqual, t->t_bool, load(t, t->t_u32, x->pend_var), cu(t, 0));
+    spv_op(&t->s, SEC_BODY, SpvOpSelectionMerge, 2, normal, SpvSelectionControlMaskNone);
+    spv_op(&t->s, SEC_BODY, SpvOpBranchConditional, 3, pending, go, normal);
+    label(t, go);
+    int l = sx_innermost_loop(x);
+    if (l < 0 || outermost > l) { fail(t, "structured jump past the outermost construct"); branch(t, normal); label(t, normal); return; }
+    if (outermost == l) {                                /* every pending jump ends at l */
+        store(t, x->pend_var, cu(t, 0));
+        branch(t, x->ctx[l].kind == CTX_LOOP ? x->ctx[l].cont : x->ctx[l].merge);
+        label(t, normal);
+        return;
+    }
+    if (!x->ctx[l].cascade || x->ctx[l].cascade > outermost + 1) x->ctx[l].cascade = outermost + 1;
+    uint32_t arrive = spv_id(&t->s), further = spv_id(&t->s), sel = spv_id(&t->s);
+    uint32_t here = op2(t, SpvOpIEqual, t->t_bool, load(t, t->t_u32, x->pend_var), cu(t, x->ctx[l].id));
+    spv_op(&t->s, SEC_BODY, SpvOpSelectionMerge, 2, sel, SpvSelectionControlMaskNone);
+    spv_op(&t->s, SEC_BODY, SpvOpBranchConditional, 3, here, arrive, further);
+    label(t, arrive);
+    store(t, x->pend_var, cu(t, 0));
+    branch(t, x->ctx[l].kind == CTX_LOOP ? x->ctx[l].cont : x->ctx[l].merge);
+    label(t, further);
+    branch(t, x->ctx[l].merge);
+    sx_unreachable(t, sel);
+    label(t, normal);
+}
+
+static void sx_tree(Sx *x, int b);
+
+static int sx_find(Sx *x, int kind, int node) {
+    for (int i = x->nctx - 1; i >= 0; i--)
+        if (x->ctx[i].kind == kind && x->ctx[i].node == node) return i;
+    return -1;
+}
+
+static void sx_branch(Sx *x, int from, int to) {
+    T *t = x->t;
+    if (to < 0) {                                         /* off the end of the code */
+        emit_outputs_at_exit(t);
+        spv_op(&t->s, SEC_BODY, SpvOpReturn, 0);
+        t->terminated = 1;
+        return;
+    }
+    if (x->rpo[to] <= x->rpo[from] || x->merge_node[to]) {
+        int k = sx_find(x, x->rpo[to] <= x->rpo[from] ? CTX_LOOP : CTX_BLOCK, to);
+        if (k < 0) { fail(t, "structured jump to block %d has no construct", to); return; }
+        sx_jump(x, k);
+    } else
+        sx_tree(x, to);                                   /* only reached from here: written in place */
+}
+
+/* block b's own code, then where it goes */
+static void sx_node(Sx *x, int b) {
+    T *t = x->t;
+    memset(t->known, 0, sizeof t->known);                /* constants don't survive jumps */
+    for (int i = x->first[b]; i <= x->last[b] && !t->terminated; i++) {
+        const Inst *in = &t->inst[i];
+        if (i == x->last[b] && is_jump(in->op)) break;   /* (the jump: below) */
+        emit_predicated(t, in, 0);
+    }
+    if (t->terminated) return;
+    switch (x->end[b]) {
+    case END_RET: break;                                 /* (EXIT/KIL ended it above) */
+    case END_FALL: sx_branch(x, b, x->next[b]); break;
+    case END_JUMP: sx_branch(x, b, x->target[b]); break;
+    case END_COND: {
+        const Inst *in = &t->inst[x->last[b]];
+        uint32_t cond = get_pred_operand(t, (int)bits(in->w, 16, 3), bit(in->w, 19));
+        uint32_t taken = spv_id(&t->s), not_taken = spv_id(&t->s), merge = spv_id(&t->s);
+        spv_op(&t->s, SEC_BODY, SpvOpSelectionMerge, 2, merge, SpvSelectionControlMaskNone);
+        spv_op(&t->s, SEC_BODY, SpvOpBranchConditional, 3, cond, taken, not_taken);
+        t->terminated = 1;
+        if (x->nctx == x->ctx_cap) x->ctx = realloc(x->ctx, (x->ctx_cap = x->ctx_cap * 2 + 16) * sizeof *x->ctx);
+        x->ctx[x->nctx++] = (Ctx){ .kind = CTX_IF, .node = b };
+        label(t, taken);
+        sx_branch(x, b, x->target[b]);
+        label(t, not_taken);
+        sx_branch(x, b, x->next[b]);
+        x->nctx--;
+        sx_unreachable(t, merge);
+        break;
+    }
+    }
+}
+
+/* block b inside the blocks that end at its merge children kids[0..n) (the last one outermost) */
+static void sx_within(Sx *x, int b, int n) {
+    T *t = x->t;
+    if (!n) { sx_node(x, b); return; }
+    int y = x->kids[b][n - 1];
+    (void)t;
+    sx_open(x, CTX_BLOCK, y);
+    sx_within(x, b, n - 1);
+    sx_close(x, 1);
+    sx_tree(x, y);
+}
+
+static void sx_tree(Sx *x, int b) {
+    T *t = x->t;
+    if (!x->loop_header[b]) { sx_within(x, b, x->nkids[b]); return; }
+    sx_open(x, CTX_LOOP, b);
+    if (!x->jumps_var) x->jumps_var = local_var(t, t->t_u32, cu(t, 0));
+    uint32_t jumps = op2(t, SpvOpIAdd, t->t_u32, load(t, t->t_u32, x->jumps_var), cu(t, 1));
+    store(t, x->jumps_var, jumps);
+    uint32_t over = op2(t, SpvOpUGreaterThanEqual, t->t_bool, jumps, cu(t, dispatch_limit(t)));
+    uint32_t out = spv_id(&t->s), go_on = spv_id(&t->s);
+    spv_op(&t->s, SEC_BODY, SpvOpSelectionMerge, 2, go_on, SpvSelectionControlMaskNone);
+    spv_op(&t->s, SEC_BODY, SpvOpBranchConditional, 3, over, out, go_on);
+    label(t, out);                                       /* (too many turns: end the shader, as the guard did) */
+    emit_outputs_at_exit(t);
+    spv_op(&t->s, SEC_BODY, SpvOpReturn, 0);
+    label(t, go_on);
+    sx_within(x, b, x->nkids[b]);
+    sx_close(x, 0);                                      /* (a loop is only left by jumps: nothing follows) */
+}
+
 static void emit_program(T *t) {
     if (t->nblocks == 1) {                               /* straight-line code */
         for (uint32_t i = 0; i < t->ninst && !t->terminated; i++) emit_predicated(t, &t->inst[i], 0);
         if (!t->terminated) { emit_outputs_at_exit(t); spv_op(&t->s, SEC_BODY, SpvOpReturn, 0); }
         return;
+    }
+    /* structured loops and ifs, unless the code can't be written so or a debug switch needs the dispatch loop */
+    if (!(t->options & (SHADER_DISPATCH_LOOP | SHADER_GUARD_REPORT | SHADER_DEBUG_STUCK))) {
+        Sx x = { .t = t };
+        int ok = sx_analyse(&x) == 0;
+        if (ok) {
+            sx_tree(&x, 0);
+            if (!t->terminated) fail(t, "structured code doesn't end");
+            t->info->structured = 1;
+        }
+        sx_free(&x);
+        if (ok) return;
     }
     /* pc = 0; loop { switch (pc) { case n: block n } } */
     t->pc_var = local_var(t, t->t_u32, cu(t, 0));
