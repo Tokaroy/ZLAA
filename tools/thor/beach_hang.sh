@@ -13,7 +13,8 @@ for r in $(seq $1); do
   now=$(last_hang)
   worst=$(grep -o 'max [0-9.]*' $S/hang$r.txt | awk '$2 > m {m = $2} END {print m + 0}')
   echo "run $r: worst frame $worst ms; $(grep -c "didn't finish" $S/hang$r.txt) unfinished submissions reported"
-  if [ "$now" != "$before" ]; then
+  # (an empty line: the ring dropped the old report, no new hang)
+  if [ -n "$now" ] && [ "$now" != "$before" ]; then
     echo "new GPU hang: $now"; $W shell "dmesg 2>/dev/null | grep -A3 'GPU hang detected' | tail -4" > $S/hang${r}_dmesg.txt
     # the driver's snapshot of the GPU at the hang (kept until read: reading it lets the next hang be captured);
     # tools/thor/kgsl_snapshot.py reads it

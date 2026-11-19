@@ -29,7 +29,7 @@ REG = {0x210: "RBBM_STATUS", 0x800: "CP_RB_BASE", 0x801: "CP_RB_BASE_HI", 0x806:
        0x930: "CP_SDS_REM_SIZE", 0x948: "CP_ROQ_AVAIL_RB", 0x949: "CP_ROQ_AVAIL_IB1", 0x94A: "CP_ROQ_AVAIL_IB2",
        0x94B: "CP_ROQ_AVAIL_SDS"}
 STATUS_BITS = ["CP_AHB_CX", "CP_AHB_CP", "CP", "GFX_DBGC", "VBIF", "TSE", "RAS", "RB", "CCU", "A2D", "LRZ", "COM_DCOM",
-               "PC_DCALL", "PC_VSD", "TESS", "SP", "VPC", "VFD", "HLSQ"]
+               "PC_DCALL", "PC_VSD", "TESS", "UCHE", "VPC", "VFD", "TPL1", "SP", "HLSQ", "VSC"]   # (Mesa's a6xx.xml)
 
 
 def sections(data):
