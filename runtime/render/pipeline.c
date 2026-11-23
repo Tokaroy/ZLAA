@@ -395,7 +395,17 @@ void render_program_made(const Program *p) {
         pthread_once(&once, start_ahead_thread);
         __atomic_store_n(&started, 1, __ATOMIC_RELEASE);
     }
+    /* (the game sets up several programs with the same shaders: ~6% of them; translated and warmed up once) */
+    uint64_t id = 0;
+    for (int i = 0; i <= STAGE_COMPUTE; i++)
+        if (p->stages >> i & 1) id = (id ^ p->code[i]) * 0x100000001B3ull;
+    id |= 1;
+    static uint64_t queued_ids[8192];
     pthread_mutex_lock(&ahead_lock);
+    unsigned h = (unsigned)(id >> 51), n = 0;
+    while (queued_ids[h] && queued_ids[h] != id && ++n < 8192) h = (h + 1) % 8192;
+    if (queued_ids[h] == id) { pthread_mutex_unlock(&ahead_lock); return; }
+    if (n < 8192) queued_ids[h] = id;
     if (ahead_head - ahead_tail < AHEAD_MAX) ahead_queue[ahead_head++ % AHEAD_MAX] = *p;
     pthread_cond_signal(&ahead_cond);
     pthread_mutex_unlock(&ahead_lock);
