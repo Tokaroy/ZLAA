@@ -34,6 +34,14 @@ void render_stats(void);             /* print and reset draw statistics */
 extern double render_compile_ms;      /* time creating shaders and pipelines; how many pipelines */
 extern unsigned render_compiles;
 extern double render_gpu_wait_ms;    /* total time waiting for the GPU's submissions to finish */
+/* LAA_HITCH_LOG=1: the main thread's shader/pipeline work in the current frame (pipeline.c); render_hitch_frame
+ * (at each present, exec.c) prints a line for a frame that was slow or had any of it, and starts the next */
+typedef struct {
+    double translate_ms, create_ms, wait_ms;   /* translating shaders, making pipelines itself, waiting for threads */
+    unsigned translates, creates, not_ready;   /* (not_ready: draws whose pipeline wasn't made in time: skipped) */
+} RenderHitch;
+extern RenderHitch render_hitch;
+void render_hitch_frame(uint64_t frame, double ms_apart);
 /* Replace a 32-bit texture's level 0 with these pixels (rows of width * 4 bytes) */
 void render_write_texture(uint64_t texture, const uint8_t *rgba, uint32_t width, uint32_t height);
 /* The game made a texture (nvnTextureInitialize, any thread): it is uploaded ahead of its first

@@ -626,6 +626,16 @@ void nvn_present(const Window *w, uint64_t texture) {
         }
         fs.last = t;
     }
+#ifdef LAA_HAVE_SDL
+    static int hitch_log = -1;                       /* LAA_HITCH_LOG=1: frames with shader/pipeline work or over 20 ms */
+    if (hitch_log < 0) hitch_log = getenv("LAA_HITCH_LOG") != NULL;
+    if (hitch_log && render_active()) {
+        static double last;
+        double t = now_ms();
+        render_hitch_frame(frames, last ? t - last : 0);
+        last = t;
+    }
+#endif
     if (frames == 1 || frames % 300 == 0) {
         fprintf(stderr, "nvn: frame %" PRIu64 " presented\n", frames);
         if (frame_stats && frames > 1) {

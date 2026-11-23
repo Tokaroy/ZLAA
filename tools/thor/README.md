@@ -26,6 +26,7 @@ the player's own settings from `env/laa_env_play.txt` in that folder.
 | `menu_test.sh outdir [s]` | the menus without hands (LAA_UI_SCRIPT): start screen, settings, Play, the pause menu at 45 s, settings, Resume; menu frames as PNGs + a screencap at the end; test save; play env put back |
 | `background_test.sh prefix` | HOME in the middle of the game and back, twice: the game must stop while hidden and go on, on a new window surface, after (screencaps of the panel) |
 | `beach_hang.sh n` | repeat the beach script (`beach_script.txt`, testsave2) until dmesg shows a new GPU hang |
+| `hitchsum.sh log...` | summary of `LAA_HITCH_LOG=1` runs: frames over 20/33 ms, draws skipped while pipelines were made, waits (start-up / save load / play), warm-up pipelines |
 | `frames.py log` | per-frame summary of an LAA_TRACE_SYNC log (slow frames and what was in them) |
 | `passes.py log` | a frame's passes/copies/clears in order from an LAA_TRACE_PIPELINES log |
 | `fade.sh`, `pullshots.sh`, `wavstats.py` | load-in brightness, pull+shrink screenshots, WAV loudness |
@@ -36,3 +37,8 @@ it, so compare only runs made back to back (A/B/A) or at the same clock.
 
 `walk.txt` is a walking input script for Mabe Village (`SCRIPT="$(cat walk.txt)"`). Pass
 `LAA_GPU_TIMING_AT=0` when counting slow frames: thor_run's default times frame 3000, which waits on the GPU.
+
+First-visit stutter (a new player's empty shader cache) is measured with a cache folder of its own, never the real one:
+`. env.sh; $W shell "mkdir -p $A/coldcache && chmod 2777 $A/coldcache"` once (made by adb with the setgid bit, so
+adb can empty it between runs: `$W shell "rm -f $A/coldcache/*"`; files in a folder the app made can't be deleted
+over adb), then `thor_run.sh out.txt LAA_CACHE_DIR=$A/coldcache LAA_HITCH_LOG=1 LAA_GPU_TIMING_AT=0` and `hitchsum.sh`.

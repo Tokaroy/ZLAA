@@ -14,6 +14,9 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+#include <sys/resource.h>
 
 /* ================================================================ shaders */
 
@@ -125,6 +128,7 @@ void render_capture_print(uint64_t frame) {
 /* time spent creating shaders and pipelines (render_stats prints it: each one stalls a frame) */
 double render_compile_ms;
 unsigned render_compiles;
+RenderHitch render_hitch;                        /* (main thread) this frame's part of it: LAA_HITCH_LOG */
 static double compile_clock(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
 
 static unsigned shader_bucket(uint64_t code) { return (unsigned)((code >> 6) * 0x9E3779B1u >> 22) & (SHADER_BUCKETS - 1); }
@@ -229,6 +233,7 @@ static HostShader *make_shader(uint64_t code, uint64_t control, int stage, uint3
 }
 
 static void free_shader(HostShader *s) {
+    if (s->compute) vkDestroyPipeline(vk.device, s->compute, NULL);
     if (s->module) vkDestroyShaderModule(vk.device, s->module, NULL);
     shader_free(&s->info);
     free(s);
@@ -250,7 +255,10 @@ HostShader *render_shader(uint64_t code, uint64_t control, int stage, uint32_t e
     shader_buckets[b] = s;
     if (!s->module) fprintf(stderr, "render: shader %#llx (stage %d) not translated: %s\n",
                             (unsigned long long)code, stage, s->info.error);
-    render_compile_ms += compile_clock() - t0;
+    double dt = compile_clock() - t0;
+    render_compile_ms += dt;
+    render_hitch.translate_ms += dt;
+    render_hitch.translates++;
     return s;
 }
 
@@ -268,6 +276,62 @@ static HostShader *ahead_done;                       /* translated, for the main
 static pthread_mutex_t ahead_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ahead_cond = PTHREAD_COND_INITIALIZER;
 static double ahead_ms;                              /* time the thread spent (into render_compile_ms) */
+static VkPipeline make_compute_pipeline(VkShaderModule module);
+static void compiled(double t0);
+static VkPipeline create(const PipelineKey *k);
+static void mark_compiled(uint64_t code, uint32_t extra);
+static unsigned warmups;                             /* (under ahead_lock) made, and their time */
+static __thread int warming;                         /* (this thread is making a warm-up pipeline: LAA_HITCH_LOG says so) */
+static double warmup_ms;
+
+/* ---- warming up ----
+ * The driver compiles a pipeline's shaders the first time a pipeline uses them and keeps them: a later pipeline
+ * with the same shaders and any other state took 0.2 ms (median, village walk from a cold cache), one with a new
+ * shader ~45 ms, which the first draw couldn't wait for (skipped: pop-in, and a frame missed waiting). So right after
+ * a program's shaders are translated (while the game loads its scene), a pipeline with guessed state is made and
+ * thrown away; the real one, at the first draw, then costs next to nothing. LAA_NO_WARMUP=1: off. */
+static void warm_up(const HostShader *vs, const HostShader *fs) {
+    static int off = -1;
+    static int warm_nice = 10;                       /* (LAA_WARMUP_NICE=n) */
+    if (off < 0) {
+        off = getenv("LAA_NO_WARMUP") != NULL;
+        if (getenv("LAA_WARMUP_NICE")) warm_nice = atoi(getenv("LAA_WARMUP_NICE"));
+    }
+    if (off || !vs->module || !fs->module) return;
+    double t0 = compile_clock();
+    PipelineKey k;
+    memset(&k, 0, sizeof k);
+    k.vs = vs->module;
+    k.fs = fs->module;
+    k.vs_code = vs->code;
+    k.fs_code = fs->code;
+    k.vs_inputs = vs->info.inputs;
+    k.vs_extra = vs->extra_outputs;
+    k.nattribs = 16;
+    for (int i = 0; i < 16; i++)
+        if (vs->info.inputs >> i & 1) k.attr[i].format = 0x2E;   /* (RGBA32F: what it reads, from stream 0) */
+    k.stream[0].stride = 16;
+    k.topology = 4;                                  /* triangles */
+    k.depth_test = k.depth_write = 1;
+    k.depth_func = 2;                                /* LESS */
+    k.depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
+    for (uint32_t c = fs->info.color_outputs; c; c >>= 1) k.color_format[k.ncolor++] = VK_FORMAT_R8G8B8A8_UNORM;
+    k.channel_mask = 0xFFFFFFFFu;
+    k.logic_op = 3;                                  /* (COPY: none) */
+    /* (at a low priority: the game's threads and the pipelines draws wait for come first; nice of this thread only) */
+    pid_t tid = (pid_t)syscall(SYS_gettid);
+    int nice_was = getpriority(PRIO_PROCESS, (id_t)tid);
+    setpriority(PRIO_PROCESS, (id_t)tid, warm_nice);
+    warming = 1;
+    VkPipeline p = create(&k);
+    warming = 0;
+    setpriority(PRIO_PROCESS, (id_t)tid, nice_was);
+    if (p) vkDestroyPipeline(vk.device, p, NULL);
+    pthread_mutex_lock(&ahead_lock);
+    warmups++;
+    warmup_ms += compile_clock() - t0;
+    pthread_mutex_unlock(&ahead_lock);
+}
 
 static void ahead_finish(HostShader *s) {
     pthread_mutex_lock(&ahead_lock);
@@ -285,14 +349,23 @@ static void *ahead_thread(void *arg) {
         Program p = ahead_queue[ahead_tail++ % AHEAD_MAX];
         pthread_mutex_unlock(&ahead_lock);
         double t0 = compile_clock();
-        if (p.stages >> STAGE_COMPUTE & 1) {
-            ahead_finish(make_shader(p.code[STAGE_COMPUTE], p.control[STAGE_COMPUTE], SHADER_COMPUTE, 0, 1));
+        if (p.stages >> STAGE_COMPUTE & 1) {          /* (its pipeline too: it needs nothing else, and the driver took
+                                                        *  up to 75 ms for one, on the main thread at its first dispatch) */
+            HostShader *cs = make_shader(p.code[STAGE_COMPUTE], p.control[STAGE_COMPUTE], SHADER_COMPUTE, 0, 1);
+            if (cs->module) {
+                double t1 = compile_clock();
+                cs->compute = make_compute_pipeline(cs->module);
+                compiled(t1);
+            }
+            ahead_finish(cs);
         } else if ((p.stages >> STAGE_VERTEX & 1) && (p.stages >> STAGE_FRAGMENT & 1)) {
             HostShader *vs = make_shader(p.code[STAGE_VERTEX], p.control[STAGE_VERTEX], SHADER_VERTEX, 0, 1);
             HostShader *fs = make_shader(p.code[STAGE_FRAGMENT], p.control[STAGE_FRAGMENT], SHADER_FRAGMENT, 0, 1);
             uint32_t missing = fs->info.inputs & ~vs->info.outputs;   /* (as draw() asks for it) */
-            if (vs->module && fs->module && missing)
-                ahead_finish(make_shader(p.code[STAGE_VERTEX], p.control[STAGE_VERTEX], SHADER_VERTEX, missing, 1));
+            HostShader *variant = vs->module && fs->module && missing
+                                ? make_shader(p.code[STAGE_VERTEX], p.control[STAGE_VERTEX], SHADER_VERTEX, missing, 1) : NULL;
+            warm_up(variant ? variant : vs, fs);     /* (before they are handed over: then they may be freed) */
+            if (variant) ahead_finish(variant);
             ahead_finish(vs);
             ahead_finish(fs);
         }
@@ -303,9 +376,13 @@ static void *ahead_thread(void *arg) {
     return NULL;
 }
 
-static void start_ahead_thread(void) {
-    pthread_t t;
-    if (pthread_create(&t, NULL, ahead_thread, NULL) == 0) pthread_detach(t);
+static void start_ahead_thread(void) {               /* (LAA_AHEAD_THREADS=n, default 2: a scene's programs come all at
+                                                        *  once while it loads, ~45 ms each when new) */
+    int n = getenv("LAA_AHEAD_THREADS") ? atoi(getenv("LAA_AHEAD_THREADS")) : 2;
+    for (int i = 0; i < n || i == 0; i++) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, ahead_thread, NULL) == 0) pthread_detach(t);
+    }
 }
 
 void render_program_made(const Program *p) {
@@ -382,21 +459,32 @@ static void make_layouts(void) {
     make_layout(compute, 1, &compute_set_layout, &compute_layout);
 }
 
-VkDescriptorSetLayout render_set_layout(void) { if (!set_layout) make_layouts(); return set_layout; }
-VkPipelineLayout render_pipeline_layout(void) { if (!set_layout) make_layouts(); return pipeline_layout; }
-VkDescriptorSetLayout render_compute_set_layout(void) { if (!set_layout) make_layouts(); return compute_set_layout; }
-VkPipelineLayout render_compute_layout(void) { if (!set_layout) make_layouts(); return compute_layout; }
+static pthread_once_t layouts_once = PTHREAD_ONCE_INIT;   /* (the translating thread may be first) */
+VkDescriptorSetLayout render_set_layout(void) { pthread_once(&layouts_once, make_layouts); return set_layout; }
+VkPipelineLayout render_pipeline_layout(void) { pthread_once(&layouts_once, make_layouts); return pipeline_layout; }
+VkDescriptorSetLayout render_compute_set_layout(void) { pthread_once(&layouts_once, make_layouts); return compute_set_layout; }
+VkPipelineLayout render_compute_layout(void) { pthread_once(&layouts_once, make_layouts); return compute_layout; }
 
-/* A compute shader's pipeline: depends on nothing but the shader */
-VkPipeline render_compute_pipeline(HostShader *cs) {
-    if (cs->compute || !cs->module) return cs->compute;
+/* A compute shader's pipeline: depends on nothing but the shader. Usually made ahead, on the translating thread;
+ * here when the first dispatch came first. */
+static VkPipeline make_compute_pipeline(VkShaderModule module) {
     VkComputePipelineCreateInfo ci = { .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
         .stage = { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-                   .module = cs->module, .pName = "main" },
+                   .module = module, .pName = "main" },
         .layout = render_compute_layout() };
+    VkPipeline p = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateComputePipelines(vk.device, vk.pipeline_cache, 1, &ci, NULL, &p));
+    return p;
+}
+
+VkPipeline render_compute_pipeline(HostShader *cs) {
+    if (cs->compute || !cs->module) return cs->compute;
     double t0 = compile_clock();
-    VK_CHECK(vkCreateComputePipelines(vk.device, vk.pipeline_cache, 1, &ci, NULL, &cs->compute));
+    cs->compute = make_compute_pipeline(cs->module);
+    compiled(t0);
     render_compile_ms += compile_clock() - t0;
+    render_hitch.create_ms += compile_clock() - t0;
+    render_hitch.creates++;
     render_compiles++;
     return cs->compute;
 }
@@ -492,6 +580,7 @@ typedef struct Pipeline {
     int started;                     /* (atomic) a compile thread took it */
     int remembered;                  /* made from pipeline_keys.bin: not saved again */
     int next_urgent;                 /* (main thread) moved to the draws' queue */
+    int waited;                      /* (main thread) a draw waited the whole budget for it: no more waits */
 } Pipeline;
 
 #define PIPELINE_BUCKETS 1024
@@ -652,20 +741,38 @@ static VkPipeline create(const PipelineKey *k) {
     int stats = pipe_stats_wanted(k->fs_code);
     if (stats) ci.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
     VkPipeline p;
+    static int hitch_log = -1;
+    if (hitch_log < 0) hitch_log = getenv("LAA_HITCH_LOG") != NULL;
+    double t0 = hitch_log ? compile_clock() : 0;
     VkResult r = vkCreateGraphicsPipelines(vk.device, vk.pipeline_cache, 1, &ci, NULL, &p);
+    if (hitch_log) {                 /* (each pipeline's time; were its shaders in one made before?) */
+        static uint64_t seen[4096][2];
+        static int nseen;
+        static pthread_mutex_t seen_lock = PTHREAD_MUTEX_INITIALIZER;
+        int vs_seen = 0, fs_seen = 0;
+        pthread_mutex_lock(&seen_lock);
+        for (int i = 0; i < nseen; i++) { vs_seen |= seen[i][0] == k->vs_code; fs_seen |= seen[i][1] == k->fs_code; }
+        if (nseen < 4096) { seen[nseen][0] = k->vs_code; seen[nseen][1] = k->fs_code; nseen++; }
+        pthread_mutex_unlock(&seen_lock);
+        fprintf(stderr, "pipeline: vs %#llx fs %#llx %.1f ms, shaders seen before: vs %d fs %d%s\n", (unsigned long long)k->vs_code,
+                (unsigned long long)k->fs_code, compile_clock() - t0, vs_seen, fs_seen, warming ? " (warm-up)" : "");
+    }
     if (r != VK_SUCCESS) {           /* the driver refused it: its draws are skipped (counted as "other") */
         fprintf(stderr, "render: pipeline vs %#llx fs %#llx: vkCreateGraphicsPipelines %s\n",
                 (unsigned long long)k->vs_code, (unsigned long long)k->fs_code, vk_result_name(r));
         return VK_NULL_HANDLE;
     }
     if (stats) log_pipe_stats(p, k->vs_code, k->fs_code);
+    mark_compiled(k->vs_code, k->vs_extra);
+    mark_compiled(k->fs_code, 0);
     return p;
 }
 
 /* New pipelines are compiled by background threads: the driver takes several ms for one, and
  * walking into a new part of the village needed dozens (frames of 100+ ms). A draw whose pipeline
  * isn't ready waits for it while the frame's budget lasts (COMPILE_WAIT_MS: frames have that much
- * to spare now; with the pipeline cache a compile takes ~1 ms). Beyond it the draw is skipped, the
+ * to spare now; with the pipeline cache a compile takes ~1 ms; only for pipelines that can be ready that soon:
+ * remembered ones, or ones whose shaders were compiled already). Beyond it the draw is skipped, the
  * object appearing a frame or two late: skipping all of them made the world pop in after the HUD
  * when a save loaded. LAA_SYNC_PIPELINES=1: compile right away (screenshots that must show all). */
 #define COMPILE_WAIT_MS 6.0
@@ -720,6 +827,19 @@ static void *compile_thread(void *arg) {
     return NULL;
 }
 
+void render_hitch_frame(uint64_t frame, double ms_apart) {
+    RenderHitch *h = &render_hitch;
+    if (ms_apart > 20 || h->translates || h->creates || h->wait_ms > 0.5 || h->not_ready) {
+        pthread_mutex_lock(&compile_lock);
+        unsigned queued = compile_head - compile_tail, ahead = ahead_pipe_head - ahead_pipe_tail;
+        pthread_mutex_unlock(&compile_lock);
+        fprintf(stderr, "hitch: frame %llu %.1f ms apart: translated %u (%.1f ms), made %u (%.1f ms), waited %.1f ms, "
+                "%u draws skipped; queued %u + %u ahead\n", (unsigned long long)frame, ms_apart, h->translates,
+                h->translate_ms, h->creates, h->create_ms, h->wait_ms, h->not_ready, queued, ahead);
+    }
+    memset(h, 0, sizeof *h);
+}
+
 void render_collect_compile_stats(void) {         /* (render_stats: once in a while, main thread) */
     pthread_mutex_lock(&compile_lock);
     render_compile_ms += async_compile_ms;
@@ -727,6 +847,12 @@ void render_collect_compile_stats(void) {         /* (render_stats: once in a wh
     async_compile_ms = 0;
     async_compiles = 0;
     pthread_mutex_unlock(&compile_lock);
+    pthread_mutex_lock(&ahead_lock);
+    if (warmups) fprintf(stderr, "render: %u pipelines made to warm up shaders, %.0f ms (on the translating threads)\n",
+                         warmups, warmup_ms);
+    warmups = 0;
+    warmup_ms = 0;
+    pthread_mutex_unlock(&ahead_lock);
 }
 
 static int sync_pipelines = -1;
@@ -745,6 +871,38 @@ static void start_compile_threads(void) {        /* (main thread) */
     }
 }
 
+/* Shaders the driver has compiled (in a pipeline made from them: a warm-up or a draw's, this run or, from the
+ * remembered pipelines, an earlier one: the pipeline cache has them): a new pipeline of those takes it ~0.2 ms, one
+ * with another shader ~45 ms. A draw waits only for the first kind; waiting for the other only missed a frame
+ * before skipping the draw anyway. By guest address (+ a vertex variant's added outputs), as remembered keys. */
+#define COMPILED_SLOTS 16384
+static uint64_t compiled_modules[COMPILED_SLOTS];
+static pthread_mutex_t compiled_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static uint64_t compiled_id(uint64_t code, uint32_t extra) { return (code ^ (uint64_t)extra << 40) | 1; }
+
+static void mark_compiled(uint64_t code, uint32_t extra) {   /* (any thread) */
+    uint64_t m = compiled_id(code, extra);
+    pthread_mutex_lock(&compiled_lock);
+    for (unsigned i = (unsigned)(m * 0x9E3779B97F4A7C15ull >> 50), n = 0; n < COMPILED_SLOTS; i = (i + 1) % COMPILED_SLOTS, n++) {
+        if (compiled_modules[i] == m) break;
+        if (!compiled_modules[i]) { compiled_modules[i] = m; break; }
+    }
+    pthread_mutex_unlock(&compiled_lock);
+}
+
+static int is_compiled(uint64_t code, uint32_t extra) {
+    uint64_t m = compiled_id(code, extra);
+    int found = 0;
+    pthread_mutex_lock(&compiled_lock);
+    for (unsigned i = (unsigned)(m * 0x9E3779B97F4A7C15ull >> 50), n = 0; n < COMPILED_SLOTS; i = (i + 1) % COMPILED_SLOTS, n++) {
+        if (compiled_modules[i] == m) { found = 1; break; }
+        if (!compiled_modules[i]) break;
+    }
+    pthread_mutex_unlock(&compiled_lock);
+    return found;
+}
+
 VkPipeline render_pipeline(const PipelineKey *k) {
     start_compile_threads();
     int sync = sync_pipelines;
@@ -758,6 +916,8 @@ VkPipeline render_pipeline(const PipelineKey *k) {
                 p->pipeline = create(k);
                 compiled(t0);
                 render_compile_ms += compile_clock() - t0;
+                render_hitch.create_ms += compile_clock() - t0;
+                render_hitch.creates++;
                 render_compiles++;
                 if (p->pipeline && !p->remembered) remember(k);
                 __atomic_store_n(&p->ready, 1, __ATOMIC_RELEASE);
@@ -770,12 +930,23 @@ VkPipeline render_pipeline(const PipelineKey *k) {
                 pthread_cond_signal(&compile_cond);
                 pthread_mutex_unlock(&compile_lock);
             }
-            double t0 = compile_clock();             /* (wait while the frame's budget lasts) */
-            while (!__atomic_load_n(&p->ready, __ATOMIC_ACQUIRE) && frame_wait_ms + compile_clock() - t0 < COMPILE_WAIT_MS) {
+            /* (wait while the frame's budget lasts, if it can be made in that time: its shaders were compiled, or it is
+             *  a remembered one: in the pipeline cache) */
+            static int wait_cold = -1;               /* LAA_WAIT_COLD=1: wait for any (as before) */
+            if (wait_cold < 0) wait_cold = getenv("LAA_WAIT_COLD") != NULL;
+            double budget = wait_cold || (!p->waited && (p->remembered || (is_compiled(k->vs_code, k->vs_extra) &&
+                                                                               is_compiled(k->fs_code, 0))))
+                          ? COMPILE_WAIT_MS : 0;
+            double t0 = compile_clock();
+            while (!__atomic_load_n(&p->ready, __ATOMIC_ACQUIRE) && frame_wait_ms + compile_clock() - t0 < budget) {
                 struct timespec ts = { 0, 100000 };
                 nanosleep(&ts, NULL);
             }
-            frame_wait_ms += compile_clock() - t0;
+            double waited = compile_clock() - t0;
+            frame_wait_ms += waited;
+            render_hitch.wait_ms += waited;
+            if (waited > 1.0 && !__atomic_load_n(&p->ready, __ATOMIC_ACQUIRE)) p->waited = 1;   /* (in vain: not again) */
+            if (!__atomic_load_n(&p->ready, __ATOMIC_ACQUIRE)) render_hitch.not_ready++;
             return __atomic_load_n(&p->ready, __ATOMIC_ACQUIRE) ? p->pipeline : VK_NULL_HANDLE;
         }
     Pipeline *p = calloc(1, sizeof *p);
@@ -795,6 +966,8 @@ VkPipeline render_pipeline(const PipelineKey *k) {
     p->pipeline = create(k);
     compiled(t0);
     render_compile_ms += compile_clock() - t0;
+    render_hitch.create_ms += compile_clock() - t0;
+    render_hitch.creates++;
     render_compiles++;
     if (p->pipeline) remember(k);
     __atomic_store_n(&p->ready, 1, __ATOMIC_RELEASE);
@@ -842,6 +1015,8 @@ void render_load_pipeline_keys(const char *path) {
             if (dup) continue;
             if (nknown == cap) { cap = cap ? cap * 2 : 1024; known = realloc(known, (size_t)cap * sizeof *known); }
             known[nknown++] = k;
+            mark_compiled(k.vs_code, k.vs_extra);    /* (the pipeline cache has these shaders compiled) */
+            mark_compiled(k.fs_code, 0);
         }
     }
     fclose(f);
