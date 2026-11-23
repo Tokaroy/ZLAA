@@ -52,7 +52,6 @@ ZLAA is young. The first areas of the game (Mabe Village, Toronbo Shores, Myster
 
 ### Rough edges
 
-- Once in a while (about 1 in 30 play sessions), the GPU stalls: a short freeze and a few broken frames, then the game carries on.
 - Short hitches the first time a new effect appears, while its shader is prepared, and some stutter on the beach.
 - Versions 1.0.1 and 1.1.0 pass tests, but only 1.0.0 has had long play sessions.
 
