@@ -68,6 +68,8 @@ const std::vector<Setting> kSettings = {
       "The corner the FPS counter sits in." },
     { "Input", "Button Layout", "LAA_SWAP_FACE", { { "Nintendo Style", NULL }, { "Xbox Style", "1" } }, 0,
       "Xbox Style swaps A with B and X with Y, for controllers labelled that way." },
+    { "Input", "Touch Controls", "LAA_TOUCH", { { "Auto", NULL }, { "Always", "1" }, { "Off", "0" } }, 0,
+      "On-screen buttons. Auto shows them when you touch the screen and hides them when a controller is used." },
     { "Input", "Stick Dead Zone", "LAA_DEADZONE",
       { { "Small", "2000" }, { "Normal", NULL }, { "Large", "8000" } }, 1,
       "How far a stick must move before it counts. Larger stops drift." },

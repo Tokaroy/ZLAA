@@ -351,6 +351,14 @@ static VkPipeline copy_pipeline(VkFormat format, int blend) {
 void render_draw_copy(VkCommandBuffer cmd, VkImageView src_view, uint32_t src_w, uint32_t src_h, const VkOffset3D sb[2],
                       VkImageView dst_view, VkFormat dst_format, uint32_t dst_w, uint32_t dst_h, const VkOffset3D db[2],
                       int linear, int flip, int blend) {
+    render_draw_copies(cmd, src_view, src_w, src_h, (const VkOffset3D (*)[2])sb, dst_view, dst_format, dst_w, dst_h,
+                       (const VkOffset3D (*)[2])db, 1, linear, flip, blend);
+}
+
+void render_draw_copies(VkCommandBuffer cmd, VkImageView src_view, uint32_t src_w, uint32_t src_h,
+                        const VkOffset3D (*sbs)[2], VkImageView dst_view, VkFormat dst_format, uint32_t dst_w,
+                        uint32_t dst_h, const VkOffset3D (*dbs)[2], int n, int linear, int flip, int blend) {
+    const VkOffset3D *sb = sbs[0], *db = dbs[0];
     VkPipeline pipeline = copy_pipeline(dst_format, blend);
     VkDescriptorSet set = new_set(dc_set_layout);
     VkDescriptorImageInfo ii = { linear ? dc_linear : dc_sampler, src_view, VK_IMAGE_LAYOUT_GENERAL };
@@ -361,7 +369,7 @@ void render_draw_copy(VkCommandBuffer cmd, VkImageView src_view, uint32_t src_w,
     VkImageAspectFlags aspects = render_aspects(dst_format);
     int color = (aspects & VK_IMAGE_ASPECT_COLOR_BIT) != 0;
     /* a copy over all of dst needn't load it first (on the tiler: no read of the old image) */
-    int whole = !blend && db[0].x == 0 && db[0].y == 0 && db[1].x == (int32_t)dst_w && db[1].y == (int32_t)dst_h;
+    int whole = n == 1 && !blend && db[0].x == 0 && db[0].y == 0 && db[1].x == (int32_t)dst_w && db[1].y == (int32_t)dst_h;
     if (color && render_pass_objects()) {
         PassKey k;
         memset(&k, 0, sizeof k);
@@ -384,18 +392,22 @@ void render_draw_copy(VkCommandBuffer cmd, VkImageView src_view, uint32_t src_w,
     forget_bound();                                  /* (another layout and static state: draws set theirs again) */
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dc_layout, 0, 1, &set, 0, NULL);
-    VkViewport v = { (float)db[0].x, (float)db[0].y, dw, dh, 0, 1 };
-    VkRect2D sc = { { db[0].x, db[0].y }, { (uint32_t)dw, (uint32_t)dh } };
-    vkCmdSetViewport(cmd, 0, 1, &v);
-    vkCmdSetScissor(cmd, 0, 1, &sc);
-    /* uv = FragCoord * scale + offset: dst pixel x -> src x = sb0 + (x - db0) * sw / dw, over src's size;
-     * flipped: src y = sb0 + (db1 - y) * sh / dh */
-    float sx = (float)(sb[1].x - sb[0].x) / dw, sy = (float)(sb[1].y - sb[0].y) / dh;
-    float pc[4] = { sx / (float)src_w, sy / (float)src_h,
-                    ((float)sb[0].x - (float)db[0].x * sx) / (float)src_w, ((float)sb[0].y - (float)db[0].y * sy) / (float)src_h };
-    if (flip) { pc[1] = -sy / (float)src_h; pc[3] = ((float)sb[0].y + (float)db[1].y * sy) / (float)src_h; }
-    vkCmdPushConstants(cmd, dc_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, pc);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    for (int i = 0; i < n; i++) {                    /* (the same source and target: one pass for all of them) */
+        sb = sbs[i], db = dbs[i];
+        dw = (float)(db[1].x - db[0].x), dh = (float)(db[1].y - db[0].y);
+        VkViewport v = { (float)db[0].x, (float)db[0].y, dw, dh, 0, 1 };
+        VkRect2D sc = { { db[0].x, db[0].y }, { (uint32_t)dw, (uint32_t)dh } };
+        vkCmdSetViewport(cmd, 0, 1, &v);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+        /* uv = FragCoord * scale + offset: dst pixel x -> src x = sb0 + (x - db0) * sw / dw, over src's size;
+         * flipped: src y = sb0 + (db1 - y) * sh / dh */
+        float sx = (float)(sb[1].x - sb[0].x) / dw, sy = (float)(sb[1].y - sb[0].y) / dh;
+        float pc[4] = { sx / (float)src_w, sy / (float)src_h,
+                        ((float)sb[0].x - (float)db[0].x * sx) / (float)src_w, ((float)sb[0].y - (float)db[0].y * sy) / (float)src_h };
+        if (flip) { pc[1] = -sy / (float)src_h; pc[3] = ((float)sb[0].y + (float)db[1].y * sy) / (float)src_h; }
+        vkCmdPushConstants(cmd, dc_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, pc);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
     if (color && render_pass_objects()) vkCmdEndRenderPass(cmd);
     else vkCmdEndRendering(cmd);
 }

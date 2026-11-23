@@ -29,6 +29,7 @@
 #include "movie/movie.h"
 #include "trace_symbols.h"
 #include "game_lib.h"
+#include "touch.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,6 +123,7 @@ static bool SDLCALL lifecycle(void *userdata, SDL_Event *e) {
             pause_on_return = 1;
         }
         kernel_set_suspended(SUSPEND_BACKGROUND, 1);
+        touch_release();
         render_background(1);
     } else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
         printf("app: back in the foreground\n");
@@ -144,10 +146,24 @@ static void open_pad(void) {
 
 /* Presses as events, so a quick tap isn't lost between two samples (input_press) */
 static void input_event(const SDL_Event *e) {
+    if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || (e->type == SDL_EVENT_GAMEPAD_AXIS_MOTION && abs(e->gaxis.value) > 16000))
+        touch_controller_used();                     /* (Auto: the touch controls go) */
     if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && pad && e->gbutton.which == SDL_GetGamepadID(pad))
         input_press(pad_bit((SDL_GamepadButton)e->gbutton.button));
     if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat)
         for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) if (e->key.scancode == keys[i].key) input_press(keys[i].bit);
+}
+
+/* The screen's fingers, for the touch controls (touch.c); 1 if one tapped their menu button */
+static int touch_event(const SDL_Event *e) {
+    if (e->type != SDL_EVENT_FINGER_DOWN && e->type != SDL_EVENT_FINGER_MOTION && e->type != SDL_EVENT_FINGER_UP &&
+        e->type != SDL_EVENT_FINGER_CANCELED)
+        return 0;
+    int w = 0, h = 0;
+    SDL_Window *win = SDL_GetWindowFromID(e->tfinger.windowID);
+    if (!win || !SDL_GetWindowSizeInPixels(win, &w, &h) || w <= 0 || h <= 0) return 0;
+    int type = e->type == SDL_EVENT_FINGER_DOWN ? TOUCH_DOWN : e->type == SDL_EVENT_FINGER_MOTION ? TOUCH_MOVE : TOUCH_UP;
+    return touch_finger(type, (uint64_t)e->tfinger.fingerID, e->tfinger.x, e->tfinger.y, w, h);
 }
 
 #ifdef LAA_HAVE_UI
@@ -210,6 +226,7 @@ static void menu_event(const SDL_Event *e) {
  * (the controller's button layout here, the FPS counter, the volume, the stick dead zone) */
 static void settings_changed(void) {
     ui_apply_settings();
+    touch_release();                                 /* (and LAA_TOUCH read again) */
     if (pad) map_face_buttons(pad);
     kernel_settings_gen++;
 }
@@ -219,6 +236,7 @@ static void pause_game(void) {                       /* the pause menu: the game
     kernel_set_suspended(SUSPEND_MENU, 1);
     render_ui_set(1);
     ui_pause();
+    touch_release();
     input_set(&(InputState){ 0 });
 }
 
@@ -259,6 +277,8 @@ static void read_input(void) {
         if (abs(lx) > dead || abs(ly) > dead) { s.lx = lx; s.ly = ly; }
         if (abs(rx) > dead || abs(ry) > dead) { s.rx = rx; s.ry = ry; }
     }
+    touch_controller_present(pad != NULL);
+    touch_input(&s);                                 /* (the touch controls, if they are shown) */
     if (s.lx > 32767) s.lx = 32767;
     if (s.ly > 32767) s.ly = 32767;
     if (s.lx < -32767) s.lx = -32767;
@@ -818,6 +838,9 @@ int main(int argc, char **argv) {
             if (menu && ui_open()) { menu_event(&e); continue; }
             int down;
             if (menu && menu_action(&e, &down) == UI_MENU && down) { pause_game(); continue; }
+            if (touch_event(&e)) { if (menu) pause_game(); continue; }
+#else
+            touch_event(&e);
 #endif
             input_event(&e);
         }

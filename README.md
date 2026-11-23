@@ -42,7 +42,7 @@ your romfs ───────────────────────
   <tr><td><b>Graphics</b></td><td>Vulkan 1.3 (tested on the Adreno 740)</td></tr>
   <tr><td><b>Memory</b></td><td>8 GB or more (tested on 16 GB)</td></tr>
   <tr><td><b>Space</b></td><td>About 6 GB for your game files, 130 MB for the built game, and some room while it builds</td></tr>
-  <tr><td><b>Controls</b></td><td>You currently need a controller to play this. Touch controls are planned for the future.</td></tr>
+  <tr><td><b>Controls</b></td><td>A controller, or the on-screen touch controls</td></tr>
   <tr><td><b>Game</b></td><td>Your own copy of <i>Link's Awakening</i> v1.0.0, v1.0.1 or v1.1.0, as <code>exefs</code> and <code>romfs</code> folders</td></tr>
 </table>
 

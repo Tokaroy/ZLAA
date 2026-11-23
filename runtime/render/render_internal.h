@@ -143,7 +143,11 @@ int render_pass_objects(void);                   /* passes with VkRenderPass obj
 VkRenderPass render_compatible_pass(uint32_t ncolor, const VkFormat *color, VkFormat depth);   /* (thread-safe) */
 void render_draw_copy(VkCommandBuffer cmd, VkImageView src_view, uint32_t src_w, uint32_t src_h, const VkOffset3D sb[2],
                       VkImageView dst_view, VkFormat dst_format, uint32_t dst_w, uint32_t dst_h, const VkOffset3D db[2],
-                      int linear, int flip, int blend);   /* (draw.c: a copy by drawing, outside a pass;
+                      int linear, int flip, int blend);
+/* The same for n rectangles of one source onto one target, in one pass (the touch controls' sprites) */
+void render_draw_copies(VkCommandBuffer cmd, VkImageView src_view, uint32_t src_w, uint32_t src_h,
+                        const VkOffset3D (*sb)[2], VkImageView dst_view, VkFormat dst_format, uint32_t dst_w,
+                        uint32_t dst_h, const VkOffset3D (*db)[2], int n, int linear, int flip, int blend);   /* (draw.c: a copy by drawing, outside a pass;
                                                     blend: premultiplied src over dst) */
 void render_load_pipeline_keys(const char *path);   /* remembered pipelines (pipeline.c), from vk.c */
 void render_save_pipeline_keys(const char *path);

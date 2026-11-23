@@ -5,14 +5,16 @@ make_osd_font.py - the on-screen overlays' letters (FPS counter, shader compilat
 
 The overlays are drawn into a small texture by the CPU (runtime/render/render.c), without a font engine: this cuts
 the few characters they need out of Nunito (SIL Open Font License, as the menus use it) at three pixel sizes, as
-8-bit coverage, with where each sits on the baseline and how far it advances.
+8-bit coverage, with where each sits on the baseline and how far it advances; and the touch controls' letters at
+a fourth, large size.
 """
 import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
-SIZES = (12, 17, 26)
+SIZES = (12, 17, 26, 64)
 CHARS = "0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.:%/-"
+TOUCH_CHARS = "ABLRXYZ"   # (the last size: only the touch controls' labels, scaled down to the buttons' size)
 
 
 def main():
@@ -30,7 +32,7 @@ def main():
         glyphs, bits = [], bytearray()
         for code in range(32, 127):
             ch = chr(code)
-            if ch not in CHARS:
+            if ch not in (TOUCH_CHARS if size == SIZES[-1] else CHARS):
                 glyphs.append((0, 0, 0, 0, 0, 0))
                 continue
             l, t, r, b = font.getbbox(ch, anchor="ls")
