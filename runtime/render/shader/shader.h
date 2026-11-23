@@ -38,7 +38,7 @@ typedef struct {
     uint32_t inputs, outputs;        /* generic attribute / varying locations used (bit i) */
     uint32_t color_outputs;          /* fragment: render targets written (bit i) */
     int writes_depth, discards;
-    int structured;                  /* jumps written as loops and ifs (else the dispatch loop, or no jumps) */
+    int structured;                  /* no dispatch loop: jumps written as loops and ifs, or none */
     uint32_t local_size[3];          /* compute: threads per workgroup */
     ShaderTexture textures[SHADER_MAX_TEXTURES];
     uint32_t ntextures;              /* binding = base + SHADER_TEXTURE_BINDING + index */

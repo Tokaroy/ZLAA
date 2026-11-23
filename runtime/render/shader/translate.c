@@ -944,10 +944,11 @@ static void report_guard(T *t, uint32_t reason) {
  * reached from two or more places ends a "block" construct (a SPIR-V loop run once: "break" there), any
  * other block is written where it is jumped to. SPIR-V only breaks out of the innermost loop: a jump
  * further out sets `pend` to its construct and breaks level by level (cascade()). Loops count their turns
- * against the dispatch limit, as before: a wrong translation still can't loop forever. Code that isn't
- * reducible (can't be written with loops and ifs) and jump tables (BRX) keep the dispatch loop. */
+ * against the dispatch limit, as before: a wrong translation still can't loop forever. A jump table (BRX) is a
+ * switch on the address, its cases jumping like an if's arms. Code that isn't reducible (can't be written with
+ * loops and ifs) and a predicated BRX keep the dispatch loop. */
 
-enum { END_FALL, END_JUMP, END_COND, END_RET };
+enum { END_FALL, END_JUMP, END_COND, END_RET, END_SWITCH };
 enum { CTX_BLOCK, CTX_LOOP, CTX_IF };
 typedef struct {
     int kind, node;
@@ -981,7 +982,7 @@ static int sx_analyse(Sx *x) {
     x->first = malloc(nb * sizeof(int)); x->last = malloc(nb * sizeof(int));
     x->end = malloc(nb * sizeof(int)); x->target = malloc(nb * sizeof(int)); x->next = malloc(nb * sizeof(int));
     for (uint32_t i = 0; i < t->ninst; i++) {
-        if (t->inst[i].op == OP_BRX) return -1;
+        if (t->inst[i].op == OP_BRX && !predicate_always(t->inst[i].w)) return -1;
         int b = t->block_of[i];
         if (t->inst[i].leader) x->first[b] = (int)i;
         x->last[b] = (int)i;
@@ -996,22 +997,33 @@ static int sx_analyse(Sx *x) {
             if ((in->op == OP_EXIT || (in->op == OP_KIL && kil_ends)) && predicate_always(in->w)) { x->end[b] = END_RET; break; }
         }
         const Inst *in = &t->inst[x->last[b]];
-        if (x->end[b] == END_FALL && is_jump(in->op) && !(bits(in->w, 16, 3) == PT && bit(in->w, 19))) {
+        if (x->end[b] == END_FALL && in->op == OP_BRX) x->end[b] = END_SWITCH;   /* (to its targets, else the next) */
+        else if (x->end[b] == END_FALL && is_jump(in->op) && !(bits(in->w, 16, 3) == PT && bit(in->w, 19))) {
             x->target[b] = in->target;
             x->end[b] = predicate_always(in->w) ? END_JUMP : END_COND;
             if (x->end[b] == END_COND && x->target[b] == x->next[b]) x->end[b] = END_FALL;
         }
     }
-    /* successors, depth-first postorder from block 0 */
+    /* successors (each once), depth-first postorder from block 0 */
     int (*succ)[2] = malloc(nb * sizeof *succ), *nsucc = calloc(nb, sizeof(int));
+    int **many = calloc(nb, sizeof *many);           /* (a switch's: its own list) */
     for (int b = 0; b < nb; b++) {
-        if (x->end[b] == END_JUMP) succ[b][nsucc[b]++] = x->target[b];
+        if (x->end[b] == END_SWITCH) {
+            const Inst *in = &t->inst[x->last[b]];
+            many[b] = malloc((in->ntargets + 1) * sizeof(int));
+            for (int k = 0; k <= in->ntargets; k++) {
+                int to = k < in->ntargets ? in->targets[k] : x->next[b], dup = to < 0;
+                for (int j = 0; j < nsucc[b] && !dup; j++) dup = many[b][j] == to;
+                if (!dup) many[b][nsucc[b]++] = to;
+            }
+        } else if (x->end[b] == END_JUMP) succ[b][nsucc[b]++] = x->target[b];
         else if (x->end[b] == END_FALL) { if (x->next[b] >= 0) succ[b][nsucc[b]++] = x->next[b]; }
         else if (x->end[b] == END_COND) {
             succ[b][nsucc[b]++] = x->target[b];
             if (x->next[b] >= 0) succ[b][nsucc[b]++] = x->next[b];
         }
     }
+#define SUCC(b, k) (many[b] ? many[b][k] : succ[b][k])
     x->rpo = malloc(nb * sizeof(int)); x->order = malloc(nb * sizeof(int));
     for (int b = 0; b < nb; b++) x->rpo[b] = -1;
     int *stack = malloc(nb * sizeof(int)), *at = calloc(nb, sizeof(int)), *seen = calloc(nb, sizeof(int));
@@ -1020,7 +1032,7 @@ static int sx_analyse(Sx *x) {
     while (nstack) {
         int b = stack[nstack - 1];
         if (at[b] < nsucc[b]) {
-            int s = succ[b][at[b]++];
+            int s = SUCC(b, at[b]); at[b]++;
             if (!seen[s]) { seen[s] = 1; stack[nstack++] = s; }
         } else {
             post[npost++] = b;
@@ -1040,7 +1052,7 @@ static int sx_analyse(Sx *x) {
             for (int p = 0; p < nb; p++) {                /* (predecessors: blocks with b as a successor) */
                 if (x->rpo[p] < 0 || x->idom[p] < 0) continue;
                 for (int k = 0; k < nsucc[p]; k++) {
-                    if (succ[p][k] != b) continue;
+                    if (SUCC(p, k) != b) continue;
                     if (best < 0) { best = p; continue; }
                     int a1 = p, a2 = best;
                     while (a1 != a2) {
@@ -1059,7 +1071,7 @@ static int sx_analyse(Sx *x) {
     for (int u = 0; u < nb && ok; u++) {
         if (x->rpo[u] < 0) continue;
         for (int k = 0; k < nsucc[u]; k++) {
-            int v = succ[u][k];
+            int v = SUCC(u, k);
             if (x->rpo[v] <= x->rpo[u]) {
                 if (!sx_dominates(x, v, u)) { ok = 0; break; }
                 x->loop_header[v] = 1;
@@ -1075,7 +1087,9 @@ static int sx_analyse(Sx *x) {
         x->kids[d] = realloc(x->kids[d], (x->nkids[d] + 1) * sizeof(int));
         x->kids[d][x->nkids[d]++] = b;
     }
-    free(succ); free(nsucc); free(stack); free(at); free(seen); free(post); free(forward_in);
+#undef SUCC
+    for (int b = 0; b < nb; b++) free(many[b]);
+    free(many); free(succ); free(nsucc); free(stack); free(at); free(seen); free(post); free(forward_in);
     return ok ? 0 : -1;
 }
 
@@ -1193,13 +1207,52 @@ static void sx_branch(Sx *x, int from, int to) {
         sx_tree(x, to);                                   /* only reached from here: written in place */
 }
 
+/* a jump table (BRX): a switch on the address it jumps to, as emit_flow's; each target once (several cases, and
+ * the default when it is one of them, share its label), each written as an if's arm */
+static void sx_switch(Sx *x, int b) {
+    T *t = x->t;
+    const Inst *in = &t->inst[x->last[b]];
+    uint32_t addr = op2(t, SpvOpIAdd, t->t_u32, get_u(t, (int)bits(in->w, 8, 8)),
+                        cu(t, (uint32_t)((int32_t)in->pc + 8 + sext(bits(in->w, 20, 24), 24))));
+    uint32_t on_sched = op2(t, SpvOpIEqual, t->t_bool, op2(t, SpvOpBitwiseAnd, t->t_u32, addr, cu(t, 31)), cu(t, 0));
+    addr = op2(t, SpvOpIAdd, t->t_u32, addr, select_(t, t->t_u32, on_sched, cu(t, 8), cu(t, 0)));
+    int n = in->ntargets, nto = 0;
+    int *to = malloc((n + 1) * sizeof(int));
+    uint32_t *labels = malloc((n + 1) * sizeof(uint32_t)), *w = malloc((2 + 2 * (size_t)n) * 4);
+    uint32_t merge = spv_id(&t->s);
+    for (int k = 0; k <= n; k++) {                       /* (k == n: the default, the next block) */
+        int dest = k < n ? in->targets[k] : x->next[b], j = 0;
+        while (j < nto && to[j] != dest) j++;
+        if (j == nto) { to[nto] = dest; labels[nto] = spv_id(&t->s); nto++; }
+        if (k == n) { w[1] = labels[j]; break; }
+        uint32_t target_pc = 0;                          /* (the case value: the target block's first address) */
+        for (uint32_t i = 0; i < t->ninst; i++)
+            if (t->inst[i].leader && t->block_of[i] == dest) { target_pc = t->inst[i].pc; break; }
+        w[2 + 2 * k] = target_pc;
+        w[3 + 2 * k] = labels[j];
+    }
+    w[0] = addr;
+    spv_op(&t->s, SEC_BODY, SpvOpSelectionMerge, 2, merge, SpvSelectionControlMaskNone);
+    spv_inst(&t->s, SEC_BODY, SpvOpSwitch, w, 2 + 2 * (uint32_t)n);
+    t->terminated = 1;
+    if (x->nctx == x->ctx_cap) x->ctx = realloc(x->ctx, (x->ctx_cap = x->ctx_cap * 2 + 16) * sizeof *x->ctx);
+    x->ctx[x->nctx++] = (Ctx){ .kind = CTX_IF, .node = b };
+    for (int j = 0; j < nto; j++) {
+        label(t, labels[j]);
+        sx_branch(x, b, to[j]);
+    }
+    x->nctx--;
+    sx_unreachable(t, merge);
+    free(to); free(labels); free(w);
+}
+
 /* block b's own code, then where it goes */
 static void sx_node(Sx *x, int b) {
     T *t = x->t;
     memset(t->known, 0, sizeof t->known);                /* constants don't survive jumps */
     for (int i = x->first[b]; i <= x->last[b] && !t->terminated; i++) {
         const Inst *in = &t->inst[i];
-        if (i == x->last[b] && is_jump(in->op)) break;   /* (the jump: below) */
+        if (i == x->last[b] && (is_jump(in->op) || in->op == OP_BRX)) break;   /* (the jump: below) */
         emit_predicated(t, in, 0);
     }
     if (t->terminated) return;
@@ -1224,6 +1277,7 @@ static void sx_node(Sx *x, int b) {
         sx_unreachable(t, merge);
         break;
     }
+    case END_SWITCH: sx_switch(x, b); break;
     }
 }
 
@@ -1260,6 +1314,7 @@ static void sx_tree(Sx *x, int b) {
 
 static void emit_program(T *t) {
     if (t->nblocks == 1) {                               /* straight-line code */
+        t->info->structured = 1;
         for (uint32_t i = 0; i < t->ninst && !t->terminated; i++) emit_predicated(t, &t->inst[i], 0);
         if (!t->terminated) { emit_outputs_at_exit(t); spv_op(&t->s, SEC_BODY, SpvOpReturn, 0); }
         return;

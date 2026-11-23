@@ -47,8 +47,8 @@ int main(int argc, char **argv) {
         printf("%s: FAIL (%s)\n", argv[1], info.error);
         return 1;
     }
-    printf("%s: ok, %u words, cbufs %#x, %u textures, inputs %#x, outputs %#x\n", argv[1], info.words,
-           info.cbuf_mask, info.ntextures, info.inputs, info.outputs);
+    printf("%s: ok, %u words, cbufs %#x, %u textures, inputs %#x, outputs %#x, %s\n", argv[1], info.words,
+           info.cbuf_mask, info.ntextures, info.inputs, info.outputs, info.structured ? "structured" : "dispatch loop");
     if (argc > 2) {
         FILE *o = fopen(argv[2], "wb");
         if (!o) { perror(argv[2]); return 2; }
