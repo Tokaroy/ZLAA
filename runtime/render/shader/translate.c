@@ -6,8 +6,8 @@
  * with a declared merge point), while Maxwell code jumps freely. So:
  *   - a shader with no jumps is emitted straight;
  *   - otherwise we cut it into basic blocks and write them as real loops and ifs ("structured
- *     control flow" below: the Adreno compiler makes much better code of it);
- *   - code that can't be written so (jump tables, irreducible jumps; LAA_DISPATCH_LOOP=1 for all) is
+ *     control flow" below: the Adreno compiler makes much better code of it; jump tables become switches);
+ *   - code that can't be written so (irreducible jumps, a predicated BRX; LAA_DISPATCH_LOOP=1 for all) is
  *         pc = 0; loop { switch (pc) { case 0: ...; pc = 3; break; case 1: ... } }
  *     which is structured whatever the jumps are. Each block ends by setting pc. A pc that is no
  *     block, or more than DISPATCH_LIMIT jumps in one invocation, ends the shader (writing its
