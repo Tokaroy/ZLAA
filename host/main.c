@@ -424,10 +424,11 @@ static void android_setup(const char **exefs, const char **romfs) {
     snprintf(path, sizeof path, "%s/cache/pipelines.bin", base);   /* (where it was before: read once) */
     setenv("LAA_CACHE_FALLBACK", path, 0);
     /* the game library: opened from internal storage (the shared folder can't hold code that runs);
-     * one built on a PC and pushed to <app folder>/game is copied there first */
+     * one built on a PC is copied there first from <app folder>/game, the Download folder (with All files access)
+     * or the folder holding the game files (game_lib.c) */
     snprintf(path, sizeof path, "%s/game", internal ? internal : base);
     setenv("LAA_GAME_DIR", path, 0);
-    snprintf(path, sizeof path, "%s/game", base);
+    snprintf(path, sizeof path, "%s/game:/storage/emulated/0/Download", base);
     setenv("LAA_GAME_IMPORT", path, 0);
     /* the dump: files/exefs + files/romfs, or LAA_EXEFS / LAA_ROMFS (another version next to it) */
     const char *e = getenv("LAA_EXEFS"), *r = getenv("LAA_ROMFS");

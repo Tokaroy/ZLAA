@@ -8,7 +8,8 @@
     <window id="window" class="small build">
         <heading class="window-title"><icon class="build" />Build Game</heading>
         <p id="build-intro">Builds the game from your files, once. Please keep the app open until it's done (plugged in
-        is best); if it closes, it carries on where it stopped next time.</p>
+        is best); if it closes, it carries on where it stopped next time. Have a PC? ZLAA Builder, on the release page,
+        does it there much faster.</p>
         <progress-track id="build-track"><progress-fill id="build-fill" /></progress-track>
         <build-line><build-percent id="build-percent" /><build-time id="build-time" /></build-line>
         <p id="build-detail" class="hint" />

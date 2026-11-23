@@ -21,7 +21,7 @@
 
 ZLAA takes the Nintendo Switch version of *The Legend of Zelda: Link's Awakening* (2019) and turns it into a native Android app. It doesn't pretend to be a Switch. Instead, the game's own ARM64 machine code is converted into C once, compiled into a library for your device, and run on top of a small stand-in for the pieces of the Switch the game talks to: its operating system's services, and its NVN graphics API, redone on Vulkan. The game's GPU shaders are converted to SPIR-V the first time they're used and kept for next time.
 
-All of it happens on the device: point ZLAA at your own game files, let it build the game once, then play.
+All of it can happen on the device: point ZLAA at your own game files, let it build the game once, then play. Or build the game on a PC, which is much faster, and copy it over.
 
 ```
 your exefs ──► recompiler ──► C code ──► compiler ──► the game, as a native library
@@ -102,6 +102,8 @@ Choose **Build Game**. ZLAA converts your copy's code and compiles it for your d
 
 What gets built stays on your device. It's made from your own files and never leaves it.
 
+Have a PC? [Building there](#can-i-build-on-a-pc-instead) is much faster.
+
 # FAQ
 
 #### Is this an emulator?
@@ -114,7 +116,13 @@ No. Those files are encrypted, and opening them needs keys from a console. ZLAA 
 
 #### Can I build on a PC instead?
 
-There's no player-friendly way yet, but I plan to implement this in the future.
+Yes, and it's much faster than on a phone. Download **ZLAA Builder** for Windows or Linux from the same release as your app and unpack it. Then start `Build Game.bat` (Windows) or `build-game.sh` (Linux) and choose your dump's folder, the one with `exefs` and `romfs`. When it's done, copy the `libgame-<build id>.so` it made into one of these places on your phone:
+
+- the Download folder
+- the folder that holds your game files
+- `Android/data/io.github.zlaa/files/game`
+
+Then start ZLAA. The builder's `README.txt` has the details. Use the builder from the same release as your app: ZLAA won't take game code from another version.
 
 #### Where are my saves?
 
@@ -132,7 +140,7 @@ python recompiler/recomp.py <your game>/exefs -o ~/zlaa-gen --no-comments
 
 - **Android app:** set up the Android NDK, SDL 3 and the menus' libraries as described in [tools/android/README.md](tools/android/README.md), then package the app with `tools/android/build_apk.sh` (signed with a debug key, or your own via `LAA_SIGN_KEYSTORE` and `LAA_SIGN_PASS_FILE`).
 - **Desktop** (a development tool, not a way to play): `tools/build_ui_deps.sh desktop`, then `cmake -S . -B build -G Ninja -DGAME_GEN_DIR=$HOME/zlaa-gen`, `cmake --build build` and `build/laa_host <your game>/exefs`.
-- **A game built on a PC:** copy its `libgame-<build id>.so` into `/sdcard/Android/data/io.github.zlaa/files/game/` and ZLAA uses it instead of Build Game.
+- **The game built on a PC:** `python tools/pc/zlaa_build.py <your game>` (needs zig 0.14 on PATH, or `pip install ziglang`) makes `libgame-<build id>.so`; copy it to the phone as in the FAQ. `tools/pc/make_package.py` makes the ZLAA Builder downloads.
 
 # Credits
 
@@ -142,7 +150,7 @@ python recompiler/recomp.py <your game>/exefs -o ~/zlaa-gen --no-comments
 - [RmlUi](https://github.com/mikke89/RmlUi) and [FreeType](https://freetype.org) for the menus and their text
 - [Nunito](https://github.com/googlefonts/nunito) and [Material Symbols](https://github.com/google/material-design-icons) for the menus' lettering and icons
 - [Noto Sans CJK](https://github.com/notofonts/noto-cjk) (SC, TC, KR, JP) for the game's Chinese, Korean and Japanese text
-- [Python](https://www.python.org) and [Zig](https://ziglang.org), which build the game on your device
+- [Python](https://www.python.org) and [Zig](https://ziglang.org), which build the game on your device or PC
 - The [SPIR-V headers](https://github.com/KhronosGroup/SPIRV-Headers) from the Khronos Group (`runtime/render/shader/spirv`)
 - [Capstone](https://www.capstone-engine.org), [Unicorn](https://www.unicorn-engine.org), [pyelftools](https://github.com/eliben/pyelftools) and [python-lz4](https://github.com/python-lz4/python-lz4) in the recompiler and its tests
 - [libvpx](https://chromium.googlesource.com/webm/libvpx) for movies in the desktop build

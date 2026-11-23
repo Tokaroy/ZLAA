@@ -103,20 +103,43 @@ int game_lib_outdated(const char *path) {
     return stat(path, &st) == 0 && !abi_matches(path, &st);
 }
 
+/* The newest library named `name` that fits this runtime among the import folders (import_dir: folders separated by
+ * ':', or NULL) and the folder that holds the game files (exefs_dir's parent: a library built on a PC can be copied
+ * beside them). 1 = found (path in out, its stat in st), 2 = only outdated ones there, 0 = none. */
+static int find_import(const char *exefs_dir, const char *import_dir, const char *name, char *out, size_t size,
+                       struct stat *st) {
+    char dirs[8192], path[4400];
+    struct stat s;
+    int found = 0, outdated = 0;
+    snprintf(dirs, sizeof dirs, "%s", import_dir ? import_dir : "");
+    size_t l = strlen(dirs);                         /* (exefs_dir without its last part, after the rest) */
+    const char *slash = strrchr(exefs_dir, '/');
+    if (slash && slash > exefs_dir && l + 2 + (size_t)(slash - exefs_dir) < sizeof dirs)
+        snprintf(dirs + l, sizeof dirs - l, "%s%.*s", l ? ":" : "", (int)(slash - exefs_dir), exefs_dir);
+    char *save = NULL;
+    for (char *dir = strtok_r(dirs, ":", &save); dir; dir = strtok_r(NULL, ":", &save)) {
+        snprintf(path, sizeof path, "%s/%s", dir, name);
+        if (stat(path, &s) != 0 || !S_ISREG(s.st_mode)) continue;
+        if (!abi_matches(path, &s)) { outdated = 1; continue; }
+        if (!found || s.st_mtime > st->st_mtime) {
+            found = 1;
+            *st = s;
+            snprintf(out, size, "%s", path);
+        }
+    }
+    return found ? 1 : outdated ? 2 : 0;
+}
+
 int game_lib_find(const char *exefs_dir, const char *lib_dir, const char *import_dir, char id[17]) {
     if (main_build_id(exefs_dir, id) != 0) return -1;
-    char path[4200];
+    char name[64], path[4400];
     struct stat st;
-    int outdated = 0;
-    for (int k = 0; k < 2; k++) {                    /* (an import that fits wins, as in game_lib_load) */
-        const char *dir = k == 0 ? import_dir : lib_dir;
-        if (!dir) continue;
-        snprintf(path, sizeof path, "%s/libgame-%s.so", dir, id);
-        if (stat(path, &st) != 0) continue;
-        if (abi_matches(path, &st)) return 0;
-        outdated = 1;
-    }
-    return outdated ? 2 : 1;
+    snprintf(name, sizeof name, "libgame-%s.so", id);
+    int imp = find_import(exefs_dir, import_dir, name, path, sizeof path, &st);
+    if (imp == 1) return 0;                          /* (an import that fits wins, as in game_lib_load) */
+    snprintf(path, sizeof path, "%s/%s", lib_dir, name);
+    if (stat(path, &st) == 0) return abi_matches(path, &st) ? 0 : 2;
+    return imp == 2 ? 2 : 1;
 }
 
 int game_lib_load(const char *exefs_dir, const char *lib_dir, const char *import_dir) {
@@ -125,11 +148,10 @@ int game_lib_load(const char *exefs_dir, const char *lib_dir, const char *import
     snprintf(name, sizeof name, "libgame-%s.so", id);
     snprintf(path, sizeof path, "%s/%s", lib_dir, name);
 
-    /* a library put in the import folder (built on a PC and pushed) replaces ours */
+    /* a library put in an import folder (built on a PC and copied over) replaces ours */
     struct stat in, have;
-    char src[4200];
-    if (import_dir) snprintf(src, sizeof src, "%s/%s", import_dir, name);
-    if (import_dir && stat(src, &in) == 0 && abi_matches(src, &in) &&     /* (an outdated one is left there) */
+    char src[4400];
+    if (find_import(exefs_dir, import_dir, name, src, sizeof src, &in) == 1 &&   /* (outdated ones are left there) */
         (stat(path, &have) != 0 || have.st_size != in.st_size || have.st_mtim.tv_sec != in.st_mtim.tv_sec)) {
         mkdir(lib_dir, 0755);
         printf("game: copying %s (%lld MB) to %s\n", src, (long long)in.st_size >> 20, lib_dir);

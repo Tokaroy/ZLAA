@@ -9,13 +9,14 @@
 #include <stdint.h>
 
 /* Read the build id of <exefs_dir>/main, open the game library made from it in lib_dir
- * (copying it there first from import_dir if another one was put there; import_dir may be
- * NULL), check it was built against this runtime's recomp_runtime.h, and hand its tables to
+ * (copying it there first if another one that fits was put in an import folder: import_dir's
+ * folders, separated by ':', or the folder holding exefs_dir; import_dir may be NULL), check
+ * it was built against this runtime's recomp_runtime.h, and hand its tables to
  * the runtime. 0 = ok; otherwise it says why on stderr. */
 int game_lib_load(const char *exefs_dir, const char *lib_dir, const char *import_dir);
 
 /* Without loading anything: <exefs_dir>/main's build id (16 hex digits) into id, and whether the
- * game library made from it is there (in lib_dir or import_dir). 0 = there, 1 = not built yet,
+ * game library made from it is there (in lib_dir or an import folder). 0 = there, 1 = not built yet,
  * 2 = built against other runtime headers (an older app: build it again), -1 = no main in exefs_dir. */
 int game_lib_find(const char *exefs_dir, const char *lib_dir, const char *import_dir, char id[17]);
 
