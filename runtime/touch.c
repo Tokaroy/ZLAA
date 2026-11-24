@@ -45,8 +45,9 @@
 #define AREA_X    0.45f        /* the movement area: the left part of the screen (of its width) ... */
 #define AREA_TOP  0.27f        /*   below the shoulder buttons (u); and within AREA_R of the control */
 #define AREA_R    2.0f         /*   (times its size), wherever it is */
-#define WIDE_W    0.220f       /* the editor's toolbar, across the middle: Reset, smaller, bigger, ABXY, Done */
-#define TOOL_GAP  0.050f
+#define WIDE_W    0.170f       /* the editor's toolbar, across the middle: Reset, Undo, Redo, smaller, bigger, ABXY, */
+#define TOOL_GAP  0.035f       /*   Done */
+#define UNDO_MAX  32           /* changes Undo can take back (and Redo bring again) */
 #define SCALE_MIN 0.5f         /* the player's sizes: half to twice the default, 10% a step */
 #define SCALE_MAX 2.0f
 #define SCALE_STEP 1.1f
@@ -70,11 +71,40 @@ static float base_x, base_y, knob_x, knob_y;          /* the held stick, in pixe
 static float stick_x, stick_y;                         /* and where it points: -1..1, y up */
 static int stick_held, dpad_x, dpad_y;                 /* the d-pad's direction: -1, 0, 1 each (y up) */
 static int mode = -1, shown, present = -1, use_stick, fixed_stick, editing;
+static int xbox_style;                                 /* LAA_TOUCH_SWAP=1: A and B, X and Y trade places */
 static float off[SLOTS][2];                            /* each control's offset from its default place (u) */
 static float scl[SLOTS];                               /*   and its size, times the default */
 static int grouped = 1;                                /* A B X Y move and resize as one */
 static int selected = NONE;                            /* (editing: the slot the toolbar's sizes act on) */
 static float drag_from[SLOTS][2];                      /* (editing: the offsets when the drag began) */
+
+typedef struct { float off[SLOTS][2], scl[SLOTS]; int grouped; } Layout;
+static Layout undo[UNDO_MAX], redo[UNDO_MAX], drag_before;   /* (editing: the layouts before each change, oldest
+                                                                 first; and those Undo left, newest last) */
+static int nundo, nredo;
+
+static Layout layout_now(void) {
+    Layout l;
+    memcpy(l.off, off, sizeof off);
+    memcpy(l.scl, scl, sizeof scl);
+    l.grouped = grouped;
+    return l;
+}
+
+/* After a change: remember the layout before it, if it changed anything (the oldest goes when there are too many) */
+static void changed_from(const Layout *before) {
+    Layout now = layout_now();
+    if (memcmp(&now, before, sizeof now) == 0) return;
+    if (nundo == UNDO_MAX) memmove(undo, undo + 1, sizeof undo[0] * --nundo);
+    undo[nundo++] = *before;
+    nredo = 0;                                         /* (a new change: what was undone is gone) */
+}
+
+static void layout_set(const Layout *l) {
+    memcpy(off, l->off, sizeof off);
+    memcpy(scl, l->scl, sizeof scl);
+    grouped = l->grouped;
+}
 
 static void layout_default(void) {
     memset(off, 0, sizeof off);
@@ -90,6 +120,8 @@ static void read_mode(void) {
     mode = m && *m == '1' ? 2 : m && *m == '0' ? 0 : 1;   /* 2 always, 1 auto, 0 never */
     use_stick = st && *st == '1';
     fixed_stick = fx && *fx == '1';
+    const char *sw = getenv("LAA_TOUCH_SWAP");
+    xbox_style = sw && *sw == '1';
     if (editing) return;                               /* (the layout being edited stays) */
     layout_default();
     const char *l = getenv("LAA_TOUCH_LAYOUT");        /* "g;x,y,s;x,y,s;...": grouped, then each slot's place, size */
@@ -116,7 +148,8 @@ static Place place(int c, float w, float u) {
     float cx = w - FACE_X * u, cy = u - FACE_Y * u, f = FACE_R * u, g = FACE_GAP * u;
     float pw = PILL_W * u / 2, ph = PILL_H * u / 2, s = SMALL_R * u, sg = SMALL_GAP * u;
     Place p;
-    switch (c) {
+    int spot = c <= TS_FACE_Y && xbox_style ? c ^ 1 : c;   /* (Xbox style: A at the bottom, B right, X left, Y top) */
+    switch (spot) {
     case TS_FACE_A: p = (Place){ cx + g, cy, f, f, 1 }; break;
     case TS_FACE_B: p = (Place){ cx, cy + g, f, f, 1 }; break;
     case TS_FACE_X: p = (Place){ cx, cy - g, f, f, 1 }; break;
@@ -128,10 +161,10 @@ static Place place(int c, float w, float u) {
     case TS_MINUS: p = (Place){ w / 2 - sg, SMALL_Y * u, s, s, 1 }; break;
     case TS_MENU: p = (Place){ w / 2, SMALL_Y * u, s, s, 1 }; break;
     case TS_PLUS: p = (Place){ w / 2 + sg, SMALL_Y * u, s, s, 1 }; break;
-    case TS_RESET: case TS_SMALLER: case TS_BIGGER: case TS_GROUP: case TS_DONE: {   /* (the toolbar, in this order) */
-        static const int order[] = { TS_RESET, TS_SMALLER, TS_BIGGER, TS_GROUP, TS_DONE };
-        float x = w / 2 - (3 * WIDE_W + 4 * SMALL_R + 4 * TOOL_GAP) * u / 2;
-        for (int k = 0; k < 5; k++) {
+    case TS_RESET: case TS_UNDO: case TS_REDO: case TS_SMALLER: case TS_BIGGER: case TS_GROUP: case TS_DONE: {
+        static const int order[] = { TS_RESET, TS_UNDO, TS_REDO, TS_SMALLER, TS_BIGGER, TS_GROUP, TS_DONE };
+        float x = w / 2 - (5 * WIDE_W + 4 * SMALL_R + 6 * TOOL_GAP) * u / 2;   /* (the toolbar, in this order) */
+        for (int k = 0; k < 7; k++) {
             float half = (order[k] == TS_SMALLER || order[k] == TS_BIGGER ? SMALL_R : WIDE_W / 2) * u;
             if (order[k] == c) return (Place){ x + half, u / 2, half, half == SMALL_R * u ? half : ph, half == SMALL_R * u };
             x += 2 * half + TOOL_GAP * u;
@@ -220,7 +253,7 @@ static void resize(float f, float w, float u) {
 
 /* Editing: which control a finger landed on (a slot), the toolbar first; NONE for none */
 static int edit_target(float px, float py, float w, float u) {
-    int b = button_at(px, py, w, u, TS_RESET, TS_GROUP);
+    int b = button_at(px, py, w, u, TS_RESET, TS_REDO);
     if (b != NONE) return b;
     b = button_at(px, py, w, u, TS_FACE_A, TS_MENU);
     if (b != NONE) return GRAB + SLOT(b);
@@ -243,6 +276,7 @@ int touch_finger(int type, uint64_t id, float x, float y, int w, int h) {
             if (what >= GRAB) {
                 selected = what - GRAB;
                 memcpy(drag_from, off, sizeof off);
+                drag_before = layout_now();
             }
         } else {
             what = button_at(px, py, W, u, TS_FACE_A, TS_MENU);
@@ -290,12 +324,23 @@ int touch_finger(int type, uint64_t id, float x, float y, int w, int h) {
             if (now != NONE) fingers[i].what = now;
         }
         if (type == TOUCH_UP) {
-            int over = what >= TS_RESET && what <= TS_GROUP ? button_at(px, py, W, u, TS_RESET, TS_GROUP) : NONE;
+            int over = what >= TS_RESET && what <= TS_REDO ? button_at(px, py, W, u, TS_RESET, TS_REDO) : NONE;
             if (over != what) over = NONE;           /* (a toolbar button counts if the finger is let go on it) */
+            Layout before = layout_now();
+            if (what >= GRAB) changed_from(&drag_before);   /* (a drag that moved something) */
             if (over == TS_RESET) { layout_default(); selected = NONE; }
             if (over == TS_SMALLER) resize(1 / SCALE_STEP, W, u);
             if (over == TS_BIGGER) resize(SCALE_STEP, W, u);
             if (over == TS_GROUP) grouped = !grouped;
+            if (over >= TS_RESET && over != TS_UNDO && over != TS_REDO && over != TS_DONE) changed_from(&before);
+            if (over == TS_UNDO && nundo) {          /* (the layout now goes to Redo's list, and the other way) */
+                redo[nredo++] = before;
+                layout_set(&undo[--nundo]);
+            }
+            if (over == TS_REDO && nredo) {
+                undo[nundo++] = before;
+                layout_set(&redo[--nredo]);
+            }
             if (over == TS_DONE) result = TOUCH_EDIT_DONE;
             if (what == TS_BASE) stick_held = 0;
             if (what == TS_DPAD) dpad_x = dpad_y = 0;
@@ -341,6 +386,7 @@ void touch_edit(int on) {
     read_mode();                                     /* (starting: the saved layout; ending: as touch_layout_text) */
     editing = on;
     selected = NONE;
+    nundo = nredo = 0;
     pthread_mutex_unlock(&lock);
 }
 
@@ -413,7 +459,7 @@ int touch_view(int w, int h, TouchView *v) {
             if (dpad_y) v->items[v->count++] = (TouchItem){ TS_ARM_V, cx, cy - dpad_y * half, 1, dpad_y < 0 ? 2 : 0 };
             if (dpad_x) v->items[v->count++] = (TouchItem){ TS_ARM_H, cx + dpad_x * half, cy, 1, dpad_x < 0 ? 1 : 0 };
         }
-        for (int c = TS_RESET; editing && c <= TS_GROUP; c++) {
+        for (int c = TS_RESET; editing && c <= TS_REDO; c++) {
             Place p = place(c, W, u);
             v->items[v->count++] = (TouchItem){ c, (int)lrintf(p.x), (int)lrintf(p.y), held[c], 0 };
         }

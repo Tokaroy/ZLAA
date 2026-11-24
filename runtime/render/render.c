@@ -541,7 +541,8 @@ static float arrow_at(float px, float py, float ax, float ay, float ux, float uy
 /* The label's coverage at a pixel of a w x h sprite (cx, cy its middle; cap: the letters' height in pixels) */
 static float label_at(int sprite, float px, float py, float cx, float cy, float w, float h, float cap) {
     static const char *const text[TS_COUNT] = { "A", "B", "X", "Y", "L", "R", "ZL", "ZR",
-                                                [TS_RESET] = "Reset", [TS_DONE] = "Done", [TS_GROUP] = "ABXY" };
+                                                [TS_RESET] = "Reset", [TS_DONE] = "Done", [TS_GROUP] = "ABXY",
+                                                [TS_UNDO] = "Undo", [TS_REDO] = "Redo" };
     if (sprite == TS_SMALLER) sprite = TS_MINUS;     /* (the editor's sizes: drawn as - and +) */
     if (sprite == TS_BIGGER) sprite = TS_PLUS;
     if (sprite == TS_MINUS || sprite == TS_PLUS || sprite == TS_MENU) {   /* (drawn as bars) */
@@ -609,7 +610,7 @@ static void ta_size(int sp, const TouchView *v, float k, int *w, int *h, float *
     case TS_DPAD: cw = ch = 2.0f * v->dpad_r; cr = v->arm_w * 0.22f; break;
     case TS_ARM_V: cw = v->arm_w, ch = v->dpad_r; cr = v->arm_w * 0.22f; break;
     case TS_ARM_H: cw = v->dpad_r, ch = v->arm_w; cr = v->arm_w * 0.22f; break;
-    default: cw = v->wide_w, ch = v->pill_h, cr = v->pill_h / 2.0f; break;   /* Reset, Done, ABXY */
+    default: cw = v->wide_w, ch = v->pill_h, cr = v->pill_h / 2.0f; break;   /* Reset, Undo, Redo, Done, ABXY */
     }
     cw *= v->scale[sp];
     ch *= v->scale[sp];

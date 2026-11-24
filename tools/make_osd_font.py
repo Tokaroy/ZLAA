@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 SIZES = (12, 17, 26, 64)
 CHARS = "0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.:%/-"
-TOUCH_CHARS = "ABDLRXYZenost"   # (the last size: only the touch controls' labels, scaled down: A B X Y L R ZL ZR Reset Done)
+TOUCH_CHARS = "ABDLRUXYZdenost"   # (the last size: only the touch controls' labels, scaled down: A B X Y L R ZL ZR Reset Undo Done)
 
 
 def main():
