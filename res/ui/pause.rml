@@ -10,6 +10,7 @@
         <menu-list>
             <button id="resume">Resume</button>
             <button id="settings">Settings</button>
+            <button id="touch-edit">Edit Touch Controls</button>
             <button id="quit" class="danger">Quit game</button>
         </menu-list>
         <p class="hint">Progress since your last save is lost when you quit.</p>

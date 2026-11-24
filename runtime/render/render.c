@@ -479,20 +479,22 @@ static void osd_draw(VkCommandBuffer cmd, int s) {      /* (over out slot s, aft
  * drawn over the game's picture in one pass ---- */
 #include "touch.h"
 #define TA_SIZE 1024
+#define TA_ROWS 2048
 static struct {
     VkBuffer buffer;                     /* (as the overlays': put there by the command buffer) */
     VkDeviceMemory memory, image_memory;
     VkImage image;
     VkImageView view;
-    uint32_t *pixels;                    /* TA_SIZE x TA_SIZE, RGBA8 (sRGB), premultiplied */
-    int w, h, dirty, ready;              /* the screen it was drawn for; to upload; its layout is GENERAL */
+    uint32_t *pixels;                    /* TA_SIZE x TA_ROWS, RGBA8 (sRGB), premultiplied */
+    int w, h, used, dirty, ready;        /* the screen it was drawn for; rows in use; to upload; layout GENERAL */
     float k;                             /* sprite pixels per screen pixel (< 1 if they didn't all fit) */
+    float scale[TS_COUNT];               /* the sizes the player chose, as drawn */
     VkOffset3D cell[TS_COUNT][2][2];     /* each sprite's place in the atlas: [sprite][pressed] */
 } ta;
 
 static void ta_init(void) {
-    ta.pixels = calloc(TA_SIZE * TA_SIZE, 4);
-    VkBufferCreateInfo bi = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = (VkDeviceSize)TA_SIZE * TA_SIZE * 4,
+    ta.pixels = calloc((size_t)TA_SIZE * TA_ROWS, 4);
+    VkBufferCreateInfo bi = { .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = (VkDeviceSize)TA_SIZE * TA_ROWS * 4,
                               .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT };
     VK_CHECK(vkCreateBuffer(vk.device, &bi, NULL, &ta.buffer));
     VkMemoryRequirements req;
@@ -502,7 +504,7 @@ static void ta_init(void) {
     VK_CHECK(vkAllocateMemory(vk.device, &mi, NULL, &ta.memory));
     VK_CHECK(vkBindBufferMemory(vk.device, ta.buffer, ta.memory, 0));
     VkImageCreateInfo ii = { .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
-        .format = VK_FORMAT_R8G8B8A8_SRGB, .extent = { TA_SIZE, TA_SIZE, 1 }, .mipLevels = 1, .arrayLayers = 1,
+        .format = VK_FORMAT_R8G8B8A8_SRGB, .extent = { TA_SIZE, TA_ROWS, 1 }, .mipLevels = 1, .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
     VK_CHECK(vkCreateImage(vk.device, &ii, NULL, &ta.image));
@@ -530,9 +532,18 @@ static float glyph_at(const OsdFont *f, const OsdGlyph *g, float x, float y) {
     return v;
 }
 
-/* The label's coverage at a pixel of a sprite (cx, cy its middle; cap: the letters' height in pixels) */
-static float label_at(int sprite, float px, float py, float cx, float cy, float cap) {
-    static const char *const text[TS_COUNT] = { "A", "B", "X", "Y", "L", "R", "ZL", "ZR" };
+/* An arrow's coverage: a triangle with its tip `size` from (ax, ay) towards (ux, uy) */
+static float arrow_at(float px, float py, float ax, float ay, float ux, float uy, float size) {
+    float qx = px - ax, qy = py - ay, along = qx * ux + qy * uy, across = fabsf(qx * -uy + qy * ux);
+    return clamp01(size - along + 0.5f) * clamp01(along + 0.6f * size + 0.5f) * clamp01((size - along) * 0.62f - across + 0.5f);
+}
+
+/* The label's coverage at a pixel of a w x h sprite (cx, cy its middle; cap: the letters' height in pixels) */
+static float label_at(int sprite, float px, float py, float cx, float cy, float w, float h, float cap) {
+    static const char *const text[TS_COUNT] = { "A", "B", "X", "Y", "L", "R", "ZL", "ZR",
+                                                [TS_RESET] = "Reset", [TS_DONE] = "Done", [TS_GROUP] = "ABXY" };
+    if (sprite == TS_SMALLER) sprite = TS_MINUS;     /* (the editor's sizes: drawn as - and +) */
+    if (sprite == TS_BIGGER) sprite = TS_PLUS;
     if (sprite == TS_MINUS || sprite == TS_PLUS || sprite == TS_MENU) {   /* (drawn as bars) */
         float half = cap * 0.55f, t = cap * 0.11f, v = 0;
         float dx = fabsf(px - cx), dy = fabsf(py - cy);
@@ -547,7 +558,19 @@ static float label_at(int sprite, float px, float py, float cx, float cy, float 
         if (sprite == TS_PLUS) v = fmaxf(v, clamp01(t - dx + 0.5f) * clamp01(half - dy + 0.5f));
         return v;
     }
-    if (sprite >= TS_MINUS || !text[sprite]) return 0;
+    if (sprite == TS_DPAD) {                         /* four arrows, out along the arms */
+        float r = w / 2 - 2, d = r * 0.64f, sz = r * 0.15f, v = 0;
+        v = fmaxf(v, arrow_at(px, py, cx, cy - d, 0, -1, sz));
+        v = fmaxf(v, arrow_at(px, py, cx, cy + d, 0, 1, sz));
+        v = fmaxf(v, arrow_at(px, py, cx - d, cy, -1, 0, sz));
+        return fmaxf(v, arrow_at(px, py, cx + d, cy, 1, 0, sz));
+    }
+    if (sprite == TS_ARM_V || sprite == TS_ARM_H) {  /* (half the d-pad: the arrow 0.14 of the d-pad past its middle) */
+        float r = (sprite == TS_ARM_V ? h : w) - 4, sz = r * 0.15f;
+        return sprite == TS_ARM_V ? arrow_at(px, py, cx, cy - r * 0.14f, 0, -1, sz)
+                                  : arrow_at(px, py, cx + r * 0.14f, cy, 1, 0, sz);
+    }
+    if (!text[sprite]) return 0;
     const OsdFont *f = &osd_fonts[3];
     float scale = (float)-f->glyphs['A' - 32].y0 / cap;   /* (font pixels per sprite pixel) */
     int width = 0;
@@ -566,91 +589,137 @@ static float label_at(int sprite, float px, float py, float cx, float cy, float 
     return v;
 }
 
-/* One sprite into a w x h cell of the atlas at (x0, y0); r: its corner radius (a circle: half its size) */
+/* (signed distance to a rounded rectangle's edge, > 0 inside: half sizes hw, hh, corner radius r) */
+static float rounded_rect(float x, float y, float hw, float hh, float r) {
+    float qx = fmaxf(fabsf(x) - (hw - r), 0), qy = fmaxf(fabsf(y) - (hh - r), 0);
+    float out = sqrtf(qx * qx + qy * qy);
+    return out > 0 ? r - out : fminf(hw - fabsf(x), hh - fabsf(y));
+}
+
+/* A sprite's size in the atlas (w x h, corner radius r), for the sizes in v, at scale k */
+static void ta_size(int sp, const TouchView *v, float k, int *w, int *h, float *r) {
+    float cw, ch, cr;
+    switch (sp) {
+    case TS_FACE_A: case TS_FACE_B: case TS_FACE_X: case TS_FACE_Y: cw = ch = 2.0f * v->face_r; cr = v->face_r; break;
+    case TS_L: case TS_R: case TS_ZL: case TS_ZR: cw = v->pill_w, ch = v->pill_h, cr = v->pill_h / 2.0f; break;
+    case TS_MINUS: case TS_PLUS: case TS_MENU: case TS_SMALLER: case TS_BIGGER:
+        cw = ch = 2.0f * v->small_r; cr = v->small_r; break;
+    case TS_BASE: cw = ch = 2.0f * v->base_r; cr = v->base_r; break;
+    case TS_KNOB: cw = ch = 2.0f * v->knob_r; cr = v->knob_r; break;
+    case TS_DPAD: cw = ch = 2.0f * v->dpad_r; cr = v->arm_w * 0.22f; break;
+    case TS_ARM_V: cw = v->arm_w, ch = v->dpad_r; cr = v->arm_w * 0.22f; break;
+    case TS_ARM_H: cw = v->dpad_r, ch = v->arm_w; cr = v->arm_w * 0.22f; break;
+    default: cw = v->wide_w, ch = v->pill_h, cr = v->pill_h / 2.0f; break;   /* Reset, Done, ABXY */
+    }
+    cw *= v->scale[sp];
+    ch *= v->scale[sp];
+    cr *= v->scale[sp];
+    *w = (int)ceilf(cw * k) + 4;
+    *h = (int)ceilf(ch * k) + 4;
+    *r = cr * k;
+}
+
+/* One sprite into a w x h cell of the atlas at (x0, y0); r: its corners' radius (a circle: half its size) */
 static void ta_paint(int sprite, int pressed, int x0, int y0, int w, int h, float r) {
     static const uint8_t dark[3] = { 18, 14, 10 }, light[3] = { 236, 214, 160 }, gold[3] = { 226, 178, 92 },
                          text[3] = { 245, 236, 215 }, ink[3] = { 30, 22, 14 };
-    float cx = w / 2.0f, cy = h / 2.0f, hw = w / 2.0f - 1.5f, hh = h / 2.0f - 1.5f;
-    float ring = fmaxf(2.0f, r * (sprite == TS_BASE ? 0.035f : 0.07f));
-    int knob = sprite == TS_KNOB, base = sprite == TS_BASE;
-    float fill_a = base ? 0.20f : knob ? (pressed ? 0.62f : 0.40f) : pressed ? 0.72f : 0.38f;
+    float cx = w / 2.0f, cy = h / 2.0f, hw = w / 2.0f - 2, hh = h / 2.0f - 2;
+    int knob = sprite == TS_KNOB, base = sprite == TS_BASE, dpad = sprite == TS_DPAD;
+    float size = dpad ? r / 0.22f : fminf(hw, hh);     /* (the d-pad: an arm's width) */
+    float ring = fmaxf(2.0f, (base ? hw * 0.035f : dpad ? size * 0.06f : size * 0.07f));
+    float fill_a = base ? 0.20f : knob ? (pressed ? 0.62f : 0.40f) : pressed ? 0.72f : dpad ? 0.42f : 0.38f;
     float ring_a = base ? (pressed ? 0.55f : 0.40f) : pressed ? 0.90f : 0.55f;
-    float cap = (sprite >= TS_L && sprite <= TS_ZR ? hh * 0.95f : hh * 0.82f);
+    float cap = sprite >= TS_L && sprite <= TS_ZR ? hh * 0.95f : sprite >= TS_RESET ? hh * 0.85f : hh * 0.82f;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
-            float px = x + 0.5f, py = y + 0.5f;
-            float qx = fmaxf(fabsf(px - cx) - (hw - r), 0), qy = fmaxf(fabsf(py - cy) - (hh - r), 0);
-            float sd = r - sqrtf(qx * qx + qy * qy);  /* (inside the rounded rectangle: > 0) */
+            float px = x + 0.5f, py = y + 0.5f, sd;
+            if (dpad) {                              /* (a cross: two arms) */
+                float a = size / 2 - 0.5f;
+                sd = fmaxf(rounded_rect(px - cx, py - cy, hw, a, r), rounded_rect(px - cx, py - cy, a, hh, r));
+            } else {
+                sd = rounded_rect(px - cx, py - cy, hw, hh, fminf(r, fminf(hw, hh)));
+            }
             float in = clamp01(sd + 0.5f);
             if (in <= 0) continue;
             uint32_t *d = &ta.pixels[(size_t)(y0 + y) * TA_SIZE + x0 + x];
-            osd_blend(d, knob || !pressed ? (knob ? light : dark) : gold, in * fill_a);
+            osd_blend(d, knob ? light : pressed ? gold : dark, in * fill_a);
             osd_blend(d, light, (in - clamp01(sd - ring + 0.5f)) * ring_a);
-            if (!knob && !base) osd_blend(d, pressed ? ink : text, label_at(sprite, px, py, cx, cy, cap) * 0.92f);
+            if (!knob && !base) osd_blend(d, pressed ? ink : text, label_at(sprite, px, py, cx, cy, (float)w, (float)h, cap) * 0.92f);
         }
 }
 
 /* The atlas for a screen w x h: the sprites at the size touch_view gives them, smaller if they don't fit */
 static void ta_build(const TouchView *v, int w, int h) {
     for (ta.k = 1;; ta.k *= 0.85f) {
-        memset(ta.pixels, 0, (size_t)TA_SIZE * TA_SIZE * 4);
+        memset(ta.pixels, 0, (size_t)TA_SIZE * TA_ROWS * 4);
         int x = 0, y = 0, row = 0, fits = 1;
         for (int sp = 0; sp < TS_COUNT && fits; sp++)
             for (int pr = 0; pr < 2 && fits; pr++) {
-                int round = sp < TS_L || sp > TS_ZR;
-                float r = sp <= TS_FACE_Y ? v->face_r : sp <= TS_ZR ? v->pill_h / 2.0f : sp <= TS_MENU ? v->small_r
-                        : sp == TS_BASE ? v->base_r : v->knob_r;
-                int cw = (int)ceilf((round ? 2 * r : v->pill_w) * ta.k) + 4, ch = (int)ceilf(2 * r * ta.k) + 4;
+                if ((sp == TS_ARM_V || sp == TS_ARM_H) && !pr) continue;   /* (only ever drawn pressed) */
+                int cw, ch;
+                float r;
+                ta_size(sp, v, ta.k, &cw, &ch, &r);
                 if (x + cw > TA_SIZE) x = 0, y += row, row = 0;
-                if (y + ch > TA_SIZE) { fits = 0; break; }
-                ta_paint(sp, pr, x, y, cw, ch, r * ta.k + 0.5f);
+                if (y + ch > TA_ROWS) { fits = 0; break; }
+                ta_paint(sp, pr, x, y, cw, ch, r);
                 ta.cell[sp][pr][0] = (VkOffset3D){ x, y, 0 };
                 ta.cell[sp][pr][1] = (VkOffset3D){ x + cw, y + ch, 1 };
                 x += cw;
                 if (ch > row) row = ch;
             }
+        ta.used = y + row;
         if (fits) break;
     }
     ta.w = w;
     ta.h = h;
+    memcpy(ta.scale, v->scale, sizeof ta.scale);
     ta.dirty = 1;
 }
 
 static void touch_draw(VkCommandBuffer cmd, int s, const TouchView *v) {
-    if (ta.w != (int)out.width || ta.h != (int)out.height) ta_build(v, (int)out.width, (int)out.height);
+    if (ta.w != (int)out.width || ta.h != (int)out.height || memcmp(ta.scale, v->scale, sizeof ta.scale) != 0)
+        ta_build(v, (int)out.width, (int)out.height);   /* (the screen or a size changed: drawn again) */
     if (ta.dirty) {
         barrier(cmd, ta.image, ta.ready ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-        for (size_t off = 0; off < (size_t)TA_SIZE * TA_SIZE * 4; off += 65536)   /* (vkCmdUpdateBuffer's limit) */
-            vkCmdUpdateBuffer(cmd, ta.buffer, off, 65536, (const uint8_t *)ta.pixels + off);
+        size_t bytes = (size_t)TA_SIZE * (size_t)ta.used * 4;   /* (the rows in use; vkCmdUpdateBuffer: 64 KB a call) */
+        for (size_t o = 0; o < bytes; o += 65536)
+            vkCmdUpdateBuffer(cmd, ta.buffer, o, bytes - o < 65536 ? (bytes - o + 3) & ~(size_t)3 : 65536,
+                              (const uint8_t *)ta.pixels + o);
         VkMemoryBarrier mb = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
                                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT };
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
         VkBufferImageCopy copy = { .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-                                   .imageExtent = { TA_SIZE, TA_SIZE, 1 } };
+                                   .imageExtent = { TA_SIZE, (uint32_t)ta.used, 1 } };
         vkCmdCopyBufferToImage(cmd, ta.buffer, ta.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
         barrier(cmd, ta.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
         ta.dirty = 0;
         ta.ready = 1;
     }
-    VkOffset3D sb[TS_COUNT][2], db[TS_COUNT][2];
+    VkOffset3D sb[TS_COUNT + 2][2], db[TS_COUNT + 2][2];
     int n = 0;
     for (int i = 0; i < v->count; i++) {             /* (each centred on its place, clipped to the screen) */
         const TouchItem *it = &v->items[i];
-        const VkOffset3D *c = ta.cell[it->sprite][it->pressed];
+        const VkOffset3D *c = ta.cell[it->sprite][it->pressed || it->sprite == TS_ARM_V || it->sprite == TS_ARM_H];
         float cw = (float)(c[1].x - c[0].x) / ta.k, ch = (float)(c[1].y - c[0].y) / ta.k;
         float x0 = it->x - cw / 2, y0 = it->y - ch / 2, x1 = x0 + cw, y1 = y0 + ch;
         float cx0 = fmaxf(x0, 0), cy0 = fmaxf(y0, 0), cx1 = fminf(x1, (float)out.width), cy1 = fminf(y1, (float)out.height);
         if (cx1 - cx0 < 1 || cy1 - cy0 < 1) continue;
         db[n][0] = (VkOffset3D){ (int32_t)cx0, (int32_t)cy0, 0 };
         db[n][1] = (VkOffset3D){ (int32_t)cx1, (int32_t)cy1, 1 };
-        sb[n][0] = (VkOffset3D){ c[0].x + (int32_t)((cx0 - x0) * ta.k), c[0].y + (int32_t)((cy0 - y0) * ta.k), 0 };
-        sb[n][1] = (VkOffset3D){ c[1].x - (int32_t)((x1 - cx1) * ta.k), c[1].y - (int32_t)((y1 - cy1) * ta.k), 1 };
+        /* (the part of the cell shown: mirrored, the clipped side is at the other end) */
+        float l = (cx0 - x0) * ta.k, r = (x1 - cx1) * ta.k, t = (cy0 - y0) * ta.k, b = (y1 - cy1) * ta.k;
+        if (it->flip & 1) { float z = l; l = r; r = z; }
+        if (it->flip & 2) { float z = t; t = b; b = z; }
+        sb[n][0] = (VkOffset3D){ c[0].x + (int32_t)l, c[0].y + (int32_t)t, 0 };
+        sb[n][1] = (VkOffset3D){ c[1].x - (int32_t)r, c[1].y - (int32_t)b, 1 };
+        if (it->flip & 1) { int32_t z = sb[n][0].x; sb[n][0].x = sb[n][1].x; sb[n][1].x = z; }   /* (read backwards) */
+        if (it->flip & 2) { int32_t z = sb[n][0].y; sb[n][0].y = sb[n][1].y; sb[n][1].y = z; }
         n++;
     }
     render_barrier(cmd);
-    if (n) render_draw_copies(cmd, ta.view, TA_SIZE, TA_SIZE, (const VkOffset3D (*)[2])sb, out.view[s],
+    if (n) render_draw_copies(cmd, ta.view, TA_SIZE, TA_ROWS, (const VkOffset3D (*)[2])sb, out.view[s],
                               vk.swapchain_format, out.width, out.height, (const VkOffset3D (*)[2])db, n, 1, 0, 1);
 }
 

@@ -22,7 +22,7 @@ typedef struct {
 
 /* What the menu is told; main.c turns buttons, keys and the stick into these */
 enum { UI_UP, UI_DOWN, UI_LEFT, UI_RIGHT, UI_ACCEPT, UI_BACK, UI_TAB_PREV, UI_TAB_NEXT, UI_MENU, UI_ACTIONS };
-enum { UI_NONE, UI_PLAY, UI_QUIT, UI_RESUME };
+enum { UI_NONE, UI_PLAY, UI_QUIT, UI_RESUME, UI_EDIT_TOUCH };   /* (EDIT_TOUCH: resume, editing the touch layout) */
 
 int ui_init(void *sdl_window, const UiPaths *paths);   /* after render_init; 0 = ok */
 void ui_start_menu(void);                /* show the start screen */
@@ -35,6 +35,7 @@ void ui_pointer(const void *sdl_event);  /* mouse / touch (SDL_Event) */
  * nothing yet; UI_PLAY, UI_QUIT, UI_RESUME close the menu) */
 int ui_frame(void);
 void ui_apply_settings(void);            /* settings -> environment variables */
+void ui_set_value(const char *name, const char *value);   /* save one ("": back to unset) and set it now */
 const char *ui_game_exefs(void);         /* the game files in use (the player can choose others: Game Files) */
 const char *ui_game_romfs(void);
 

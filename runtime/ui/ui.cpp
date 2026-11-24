@@ -70,6 +70,13 @@ const std::vector<Setting> kSettings = {
       "Xbox Style swaps A with B and X with Y, for controllers labelled that way." },
     { "Input", "Touch Controls", "LAA_TOUCH", { { "Auto", NULL }, { "Always", "1" }, { "Off", "0" } }, 0,
       "On-screen buttons. Auto shows them when you touch the screen and hides them when a controller is used." },
+    { "Input", "Touch Movement", "LAA_TOUCH_STICK", { { "D-Pad", NULL }, { "Stick", "1" } }, 0,
+      "What moves Link on the touch controls: a d-pad, or a stick." },
+    { "Input", "Touch Stick Position", "LAA_TOUCH_FIXED", { { "Follows Your Thumb", NULL }, { "Stays in Place", "1" } },
+      0, "Where the touch stick sits: where your thumb lands, or always in its own place." },
+    { "Input", "Touch Layout", "LAA_TOUCH_LAYOUT", { { "Default", NULL }, { "Custom", NULL } }, 0,
+      "Move and resize the touch controls from the pause menu: Edit Touch Controls. Choose Default to put them all "
+      "back." },
     { "Input", "Stick Dead Zone", "LAA_DEADZONE",
       { { "Small", "2000" }, { "Normal", NULL }, { "Large", "8000" } }, 1,
       "How far a stick must move before it counts. Larger stops drift." },
@@ -96,7 +103,11 @@ std::map<std::string, bool> fixed;                      /* set outside the menu 
 UiPaths paths;                                          /* (pointing into path_copies: the caller's may go away) */
 std::string path_copies[6];
 
+/* (Touch Layout: the controls' places as text, made by the editor in the game: Custom when there is any) */
+bool is_layout(const Setting &s) { return strcmp(s.var, "LAA_TOUCH_LAYOUT") == 0; }
+
 int choice_of(const Setting &s) {
+    if (is_layout(s) && !fixed[s.var]) return config.count(s.var) && !config[s.var].empty() ? 1 : 0;
     if (fixed[s.var]) {
         const char *v = getenv(s.var);
         for (size_t i = 0; i < s.choices.size(); i++)
@@ -640,6 +651,7 @@ void change_setting(int row, int step) {
     if (fixed[s.var]) return;
     int n = (int)s.choices.size(), c = (choice_of(s) + step + n) % n;
     const char *v = s.choices[(size_t)c].value;
+    if (is_layout(s) && c == 1) return;              /* (Custom comes from the editor; from here only Default) */
     config[s.var] = v ? v : "";
     save_config();
     settings_changed = 1;
@@ -832,6 +844,7 @@ public:
             }
             if (id == "build-back") { close_build(); return; }
             if (id == "resume") { result = UI_RESUME; return; }
+            if (id == "touch-edit") { result = UI_EDIT_TOUCH; return; }
             if (id == "settings") { open_settings(); return; }
             if (id == "quit") { result = UI_QUIT; return; }
             if (id == "close") { close_settings(); return; }
@@ -1051,11 +1064,21 @@ extern "C" int ui_settings_changed(void) {
     return c;
 }
 
+/* A value the game side made (the touch layout editor's), kept with the settings */
+extern "C" void ui_set_value(const char *name, const char *value) {
+    if (fixed[name]) return;
+    config[name] = value;
+    save_config();
+    if (*value) setenv(name, value, 1);
+    else unsetenv(name);
+}
+
 extern "C" void ui_apply_settings(void) {
     for (const Setting &s : kSettings) {
         if (fixed[s.var]) continue;
         int c = choice_of(s);
         const char *v = c >= 0 ? s.choices[(size_t)c].value : NULL;
+        if (is_layout(s)) v = c == 1 ? config[s.var].c_str() : NULL;
         if (v) setenv(s.var, v, 1);
         else unsetenv(s.var);
         printf("menu: %s=%s\n", s.var, v ? v : "(unset)");

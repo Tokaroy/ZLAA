@@ -154,7 +154,7 @@ static void input_event(const SDL_Event *e) {
         for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) if (e->key.scancode == keys[i].key) input_press(keys[i].bit);
 }
 
-/* The screen's fingers, for the touch controls (touch.c); 1 if one tapped their menu button */
+/* The screen's fingers, for the touch controls (touch.c): TOUCH_MENU_TAPPED, TOUCH_EDIT_DONE or TOUCH_NOTHING */
 static int touch_event(const SDL_Event *e) {
     if (e->type != SDL_EVENT_FINGER_DOWN && e->type != SDL_EVENT_FINGER_MOTION && e->type != SDL_EVENT_FINGER_UP &&
         e->type != SDL_EVENT_FINGER_CANCELED)
@@ -838,7 +838,16 @@ int main(int argc, char **argv) {
             if (menu && ui_open()) { menu_event(&e); continue; }
             int down;
             if (menu && menu_action(&e, &down) == UI_MENU && down) { pause_game(); continue; }
-            if (touch_event(&e)) { if (menu) pause_game(); continue; }
+            int t = touch_event(&e);
+            if (t == TOUCH_MENU_TAPPED && menu) { pause_game(); continue; }
+            if (t == TOUCH_EDIT_DONE) {              /* the layout editor's Done: kept with the settings */
+                char layout[1024];
+                touch_layout_text(layout, sizeof layout);
+                ui_set_value("LAA_TOUCH_LAYOUT", layout);
+                touch_edit(0);
+                printf("touch: layout %s\n", *layout ? layout : "(default)");
+                continue;
+            }
 #else
             touch_event(&e);
 #endif
@@ -854,8 +863,9 @@ int main(int argc, char **argv) {
             int r = ui_frame();
             if (r == UI_QUIT) { fflush(NULL); _exit(0); }
             if (ui_settings_changed()) settings_changed();
-            if (r == UI_RESUME) {
-                printf("menu: resumed\n");
+            if (r == UI_RESUME || r == UI_EDIT_TOUCH) {
+                printf("menu: resumed%s\n", r == UI_EDIT_TOUCH ? ", editing the touch controls" : "");
+                if (r == UI_EDIT_TOUCH) touch_edit(1);
                 render_ui_set(0);
                 kernel_set_suspended(SUSPEND_MENU, 0);
             }
