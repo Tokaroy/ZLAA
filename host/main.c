@@ -59,6 +59,7 @@
  * Nintendo layout: its A is on the right but SDL calls it "south", Xbox's A's position), else by
  * position as on a Switch controller (east = A, south = B, north = X, west = Y). */
 static uint64_t face_bit[4];                         /* SOUTH, EAST, WEST, NORTH -> BTN_* */
+static void map_game_buttons(void);
 
 static void map_face_buttons(SDL_Gamepad *pad) {
     static const SDL_GamepadButton pos[4] = { SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST,
@@ -77,6 +78,7 @@ static void map_face_buttons(SDL_Gamepad *pad) {
     for (int i = 0; i < 4; i++) letter[i] = face_bit[i] == BTN_A ? 0 : face_bit[i] == BTN_B ? 1 : face_bit[i] == BTN_X ? 2 : 3;
     printf("input: %s: south = %s, east = %s, west = %s, north = %s\n", SDL_GetGamepadName(pad), names[letter[0]],
            names[letter[1]], names[letter[2]], names[letter[3]]);
+    map_game_buttons();                              /* (the game's: the player's remapping, or these) */
 }
 
 static SDL_Gamepad *pad;
@@ -101,6 +103,78 @@ static uint64_t pad_bit(SDL_GamepadButton b) {
     for (size_t i = 0; i < sizeof map / sizeof *map; i++) if (map[i].b == b) return map[i].bit;
     return 0;
 }
+
+/* ---- button remapping (Settings > Input > Button Remapping, ui.cpp): which controller input presses each of the
+ * game's buttons. A source is an SDL gamepad button, or a trigger (SRC_LT / SRC_RT, pulled past half way).
+ * LAA_REMAP: the player's choice, one source per target (in pad_targets' order, comma separated); unset = the
+ * default, as pad_bit maps them. The menus always use the default, so a mapping can never lock the player out of
+ * the menu that changes it. ---- */
+static const struct { const char *name; uint64_t bit; } pad_targets[] = {
+    { "A", BTN_A }, { "B", BTN_B }, { "X", BTN_X }, { "Y", BTN_Y }, { "L", BTN_L }, { "R", BTN_R },
+    { "ZL", BTN_ZL }, { "ZR", BTN_ZR }, { "+ (Plus)", BTN_PLUS }, { "- (Minus)", BTN_MINUS },
+    { "Left Stick Press", BTN_LSTICK }, { "Right Stick Press", BTN_RSTICK }, { "D-Pad Up", BTN_UP },
+    { "D-Pad Down", BTN_DOWN }, { "D-Pad Left", BTN_LEFT }, { "D-Pad Right", BTN_RIGHT },
+};
+#define PAD_TARGETS (int)(sizeof pad_targets / sizeof *pad_targets)
+#define SRC_LT 100
+#define SRC_RT 101
+static uint64_t game_bits[SRC_RT + 1];               /* source -> the game's buttons it presses */
+
+int host_pad_targets(void) { return PAD_TARGETS; }
+const char *host_pad_target_name(int t) { return t >= 0 && t < PAD_TARGETS ? pad_targets[t].name : ""; }
+
+int host_pad_default(int t) {                        /* the source that presses target t by default */
+    if (t < 0 || t >= PAD_TARGETS) return -1;
+    if (pad_targets[t].bit == BTN_ZL) return SRC_LT;
+    if (pad_targets[t].bit == BTN_ZR) return SRC_RT;
+    for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; b++)
+        if (b != SDL_GAMEPAD_BUTTON_GUIDE && pad_bit((SDL_GamepadButton)b) == pad_targets[t].bit) return b;
+    return -1;
+}
+
+void host_pad_source_name(int src, char *out, size_t size) {
+    static const char *const names[SDL_GAMEPAD_BUTTON_COUNT] = {
+        [SDL_GAMEPAD_BUTTON_SOUTH] = "Bottom Button", [SDL_GAMEPAD_BUTTON_EAST] = "Right Button",
+        [SDL_GAMEPAD_BUTTON_WEST] = "Left Button", [SDL_GAMEPAD_BUTTON_NORTH] = "Top Button",
+        [SDL_GAMEPAD_BUTTON_BACK] = "Select", [SDL_GAMEPAD_BUTTON_START] = "Start",
+        [SDL_GAMEPAD_BUTTON_LEFT_STICK] = "Left Stick Press", [SDL_GAMEPAD_BUTTON_RIGHT_STICK] = "Right Stick Press",
+        [SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] = "Left Shoulder", [SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = "Right Shoulder",
+        [SDL_GAMEPAD_BUTTON_DPAD_UP] = "D-Pad Up", [SDL_GAMEPAD_BUTTON_DPAD_DOWN] = "D-Pad Down",
+        [SDL_GAMEPAD_BUTTON_DPAD_LEFT] = "D-Pad Left", [SDL_GAMEPAD_BUTTON_DPAD_RIGHT] = "D-Pad Right",
+        [SDL_GAMEPAD_BUTTON_MISC1] = "Share", [SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1] = "Right Paddle 1",
+        [SDL_GAMEPAD_BUTTON_LEFT_PADDLE1] = "Left Paddle 1", [SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2] = "Right Paddle 2",
+        [SDL_GAMEPAD_BUTTON_LEFT_PADDLE2] = "Left Paddle 2", [SDL_GAMEPAD_BUTTON_TOUCHPAD] = "Touchpad",
+    };
+    if (src == SRC_LT || src == SRC_RT) { snprintf(out, size, src == SRC_LT ? "Left Trigger" : "Right Trigger"); return; }
+    if (src < 0 || src >= SDL_GAMEPAD_BUTTON_COUNT) { snprintf(out, size, "None"); return; }
+    if (pad && src <= SDL_GAMEPAD_BUTTON_NORTH) {     /* (a face button by the letter printed on it, when known) */
+        static const char *const letters[] = { "", "A", "B", "X", "Y", "Cross", "Circle", "Square", "Triangle" };
+        SDL_GamepadButtonLabel l = SDL_GetGamepadButtonLabel(pad, (SDL_GamepadButton)src);
+        if (l > SDL_GAMEPAD_BUTTON_LABEL_UNKNOWN && l <= SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE) {
+            snprintf(out, size, "%s Button", letters[l]);
+            return;
+        }
+    }
+    snprintf(out, size, "%s", names[src] ? names[src] : "Other Button");
+}
+
+/* The game's table, from LAA_REMAP or the defaults (after map_face_buttons: the defaults follow it) */
+static void map_game_buttons(void) {
+    memset(game_bits, 0, sizeof game_bits);
+    const char *r = getenv("LAA_REMAP");
+    for (int t = 0; t < PAD_TARGETS; t++) {
+        int src = host_pad_default(t);
+        if (r && *r) {
+            src = atoi(r);
+            r = strchr(r, ',');
+            r = r ? r + 1 : "";
+        }
+        if (src >= 0 && src <= SRC_RT) game_bits[src] |= pad_targets[t].bit;
+    }
+    if (r) printf("input: buttons remapped (LAA_REMAP=%s)\n", getenv("LAA_REMAP"));
+}
+
+static uint64_t game_bit(int src) { return src >= 0 && src <= SRC_RT ? game_bits[src] : 0; }
 
 static const struct { SDL_Scancode key; uint64_t bit; } keys[] = {
     { SDL_SCANCODE_X, BTN_A }, { SDL_SCANCODE_Z, BTN_B }, { SDL_SCANCODE_S, BTN_X }, { SDL_SCANCODE_A, BTN_Y },
@@ -149,7 +223,7 @@ static void input_event(const SDL_Event *e) {
     if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || (e->type == SDL_EVENT_GAMEPAD_AXIS_MOTION && abs(e->gaxis.value) > 16000))
         touch_controller_used();                     /* (Auto: the touch controls go) */
     if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && pad && e->gbutton.which == SDL_GetGamepadID(pad))
-        input_press(pad_bit((SDL_GamepadButton)e->gbutton.button));
+        input_press(game_bit(e->gbutton.button));
     if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat)
         for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) if (e->key.scancode == keys[i].key) input_press(keys[i].bit);
 }
@@ -215,6 +289,21 @@ static int menu_action(const SDL_Event *e, int *down) {
 
 static void menu_event(const SDL_Event *e) {
     open_pad();
+    if (ui_waiting_for_button()) {                   /* (Button Remapping: the next button or trigger is the answer) */
+        static int trigger_held[2];
+        if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e->gbutton.button != SDL_GAMEPAD_BUTTON_GUIDE) {
+            ui_button_pressed(e->gbutton.button);
+            return;
+        }
+        if (e->type == SDL_EVENT_GAMEPAD_AXIS_MOTION && (e->gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ||
+                                                        e->gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)) {
+            int k = e->gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, on = e->gaxis.value > 16000;
+            if (on && !trigger_held[k]) ui_button_pressed(k ? SRC_RT : SRC_LT);
+            trigger_held[k] = on;
+            return;
+        }
+        if (e->type == SDL_EVENT_GAMEPAD_BUTTON_UP || e->type == SDL_EVENT_GAMEPAD_AXIS_MOTION) return;
+    }
     if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)    /* (which button is which on this controller) */
         printf("menu: button %s\n", SDL_GetGamepadStringForButton((SDL_GamepadButton)e->gbutton.button));
     int down, a = menu_action(e, &down);
@@ -267,9 +356,9 @@ static void read_input(void) {
     if (k[SDL_SCANCODE_K]) s.ry -= 32767;
     if (pad) {
         for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; b++)
-            if (SDL_GetGamepadButton(pad, (SDL_GamepadButton)b)) s.buttons |= pad_bit((SDL_GamepadButton)b);
-        if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) s.buttons |= BTN_ZL;
-        if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) s.buttons |= BTN_ZR;
+            if (SDL_GetGamepadButton(pad, (SDL_GamepadButton)b)) s.buttons |= game_bit(b);
+        if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) s.buttons |= game_bit(SRC_LT);
+        if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) s.buttons |= game_bit(SRC_RT);
         int lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), ly = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
         int rx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX), ry = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY);
         static int dead, gen = -1;                   /* stick dead zone (LAA_DEADZONE, of 32767; the menu's) */

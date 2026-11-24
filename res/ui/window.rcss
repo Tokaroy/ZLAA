@@ -25,13 +25,13 @@ window {
     border-color: rgba(146, 135, 91, 70%);
     background-color: rgb(var(--surface-rgb));  /* (solid: no blur behind it yet) */
     opacity: 0;
-    transform: translateY(16dp);
-    transition: opacity transform 0.22s cubic-out;
-}
+    top: 16dp;                         /* (it slides up as it opens: by its place, not a transform: a transform */
+    transition: opacity top 0.22s cubic-out;   /*  would need clip masks for its scrolling rows, which */
+}                                      /*  ui_render.cpp doesn't have) */
 
 window[open] {
     opacity: 1;
-    transform: translateY(0dp);
+    top: 0dp;
 }
 
 window.small {

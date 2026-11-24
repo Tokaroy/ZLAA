@@ -573,10 +573,85 @@ void build_go() {
 
 /* ---- the settings window ---- */
 
+/* Button Remapping (a page of the Input tab): which controller button presses each of the game's buttons. The list
+ * (one source per target, host_pad_*) is kept as LAA_REMAP, "" = the defaults. A row waits for the next button
+ * pressed (main.c hands it over: ui_button_pressed); a button another target had moves there (they swap). */
+bool remap_page;
+int remap_waiting = -1;                                  /* the target waiting for a button, or -1 */
+Uint64 remap_since;
+#define REMAP_WAIT_MS 5000
+
+std::vector<int> remap_list() {
+    std::vector<int> l;
+    int n = host_pad_targets();
+    const char *r = config.count("LAA_REMAP") ? config["LAA_REMAP"].c_str() : "";
+    if (fixed["LAA_REMAP"]) r = getenv("LAA_REMAP") ? getenv("LAA_REMAP") : "";
+    for (int t = 0; t < n; t++) {
+        int src = host_pad_default(t);
+        if (*r) {
+            src = atoi(r);
+            r = strchr(r, ',');
+            r = r ? r + 1 : "";
+        }
+        l.push_back(src);
+    }
+    return l;
+}
+
+bool remap_custom() {
+    std::vector<int> l = remap_list();
+    for (int t = 0; t < (int)l.size(); t++) if (l[(size_t)t] != host_pad_default(t)) return true;
+    return false;
+}
+
+void remap_save(const std::vector<int> &l) {
+    std::string text;
+    bool custom = false;
+    for (int t = 0; t < (int)l.size(); t++) {
+        text += (t ? "," : "") + std::to_string(l[(size_t)t]);
+        custom |= l[(size_t)t] != host_pad_default(t);
+    }
+    if (!custom) text.clear();
+    config["LAA_REMAP"] = text;
+    save_config();
+    if (custom) setenv("LAA_REMAP", text.c_str(), 1);
+    else unsetenv("LAA_REMAP");
+    settings_changed = 1;
+    printf("menu: LAA_REMAP=%s\n", custom ? text.c_str() : "(default)");
+}
+
+std::string source_name(int src) {
+    char b[64];
+    host_pad_source_name(src, b, sizeof b);
+    return b;
+}
+
+void show_remap_help() {
+    settings_doc->GetElementById("help")->SetInnerRML(
+        "<heading>Button Remapping</heading><p>Choose a button of the game, then press the controller button you want "
+        "for it. Waiting " + std::to_string(REMAP_WAIT_MS / 1000) + " seconds cancels. The menus keep the usual "
+        "buttons.</p>");
+}
+
+
 void build_settings() {
     std::string tabs, rows;
     for (const char *t : kTabs)
         tabs += std::string("<tab id=\"tab-") + t + "\"" + (tab == t ? " selected" : "") + ">" + t + "</tab>";
+    if (remap_page) {                                    /* (the Button Remapping page, in place of the Input rows) */
+        std::vector<int> l = remap_list();
+        for (int t = 0; t < (int)l.size(); t++)
+            rows += "<row id=\"remap-" + std::to_string(t) + "\"" + (fixed["LAA_REMAP"] ? " class=\"fixed\"" : "") + ">"
+                    "<key>" + esc(host_pad_target_name(t)) + "</key><value><span>" +
+                    esc(t == remap_waiting ? "Press a button..." : source_name(l[(size_t)t])) + "</span></value></row>";
+        rows += "<row id=\"remap-reset\"><key>Reset to Default</key><value></value></row>";
+        settings_doc->GetElementById("tab-bar")->SetInnerRML(tabs);
+        settings_doc->GetElementById("rows")->SetInnerRML(rows);
+        show_remap_help();
+        settings_doc->GetElementById("window")->SetClass("about", false);
+        settings_doc->GetElementById("hint-a")->SetInnerRML("Change");
+        return;
+    }
     for (size_t i = 0; i < kSettings.size(); i++) {
         const Setting &s = kSettings[i];
         if (tab != s.tab) continue;
@@ -587,6 +662,9 @@ void build_settings() {
                 (fixed[s.var] ? "<icon class=\"lock\"/><span>" + esc(value) + "</span>"
                                : "<icon class=\"left\"/><span>" + esc(value) + "</span><icon class=\"right\"/>") +
                 "</value></row>";
+        if (strcmp(s.var, "LAA_SWAP_FACE") == 0)         /* (Button Remapping: after Button Layout) */
+            rows += std::string("<row id=\"remap-row\"><key>Button Remapping</key><value><span>") +
+                    (remap_custom() ? "Custom" : "Default") + "</span><icon class=\"right\"/></value></row>";
     }
     if (tab == "Interface" && showing == 1)              /* (not over the running game) */
         rows = "<row id=\"files-row\"><key>Game Files</key><value><span>" + esc(files_label()) +
@@ -625,13 +703,29 @@ void open_settings() {
 }
 
 void close_settings() {
+    remap_page = false;
+    remap_waiting = -1;
     settings_doc->GetElementById("window")->RemoveAttribute("open");
     settings_doc->Hide();
     if (showing == 1) { start_doc->Focus(); focus_first(start_doc, "#settings"); }
     else { pause_doc->Focus(); focus_first(pause_doc, "#settings"); }
 }
 
+void remap_leave() {                                     /* back to the Input rows, on Button Remapping */
+    remap_page = false;
+    remap_waiting = -1;
+    build_settings();
+    focus_first(settings_doc, "#remap-row");
+}
+
+void remap_focus(const std::string &id) {             /* (after the rows were made again: laid out first, so the */
+    settings_doc->UpdateDocument();                      /*  row can be scrolled into sight) */
+    if (Rml::Element *e = settings_doc->GetElementById(id)) e->Focus(true);
+}
+
 void switch_tab(int step) {
+    remap_page = false;
+    remap_waiting = -1;
     size_t n = sizeof kTabs / sizeof *kTabs, k = 0;
     while (k < n && tab != kTabs[k]) k++;
     tab = kTabs[(k + n + (size_t)step) % n];
@@ -816,6 +910,9 @@ public:
                 last_focus_doc = e->GetOwnerDocument();
                 last_focus_id = e->GetId();
             }
+            if (e && e->GetTagName() == "row")              /* (a long page: the focused row scrolled into sight) */
+                e->ScrollIntoView(Rml::ScrollIntoViewOptions(Rml::ScrollAlignment::Nearest));
+            if (e && e->GetId().rfind("remap-", 0) == 0) { show_remap_help(); return; }
             if (e && e->GetId() == "files-row") show_files_help("", false);
             else if (e && e->GetId() == "space-row") show_space_help();
             else show_help(row_of(e));
@@ -827,6 +924,24 @@ public:
             if (id == "play" && game_ready) { result = UI_PLAY; return; }
             if (id == "play" && needs_build) { open_build(); return; }
             if (id == "play" && needs_files) { choose_game_files(); return; }
+            if (id == "remap-row") { remap_page = true; build_settings(); remap_focus("remap-0"); return; }
+            if (id == "remap-reset") {
+                if (fixed["LAA_REMAP"]) return;
+                remap_waiting = -1;
+                std::vector<int> l;
+                for (int t = 0; t < host_pad_targets(); t++) l.push_back(host_pad_default(t));
+                remap_save(l);
+                build_settings();
+                remap_focus("remap-reset");
+                return;
+            }
+            if (id.rfind("remap-", 0) == 0 && !fixed["LAA_REMAP"]) {   /* (a target: wait for its button) */
+                remap_waiting = atoi(id.c_str() + 6);
+                remap_since = SDL_GetTicks();
+                build_settings();
+                remap_focus(id);
+                return;
+            }
             if (id == "files-row") { choose_game_files(); return; }
             if (id == "space-row") { free_up_space(); return; }
             if (id == "link-row") { SDL_OpenURL(LAA_PROJECT_URL); return; }
@@ -885,6 +1000,7 @@ void act(int action) {
         if (build_doc && build_doc->IsVisible()) close_build();
         else if (update_doc && update_doc->IsVisible()) close_update();
         else if (news_doc && news_doc->IsVisible()) close_whats_new();
+        else if (in_settings && remap_page) remap_leave();
         else if (in_settings) close_settings();
         else if (showing == 2) result = UI_RESUME;
         break;
@@ -904,6 +1020,7 @@ extern "C" int ui_init(void *sdl_window, const UiPaths *p) {
         *out[k] = in[k] ? path_copies[k].c_str() : NULL;
     }
     for (const Setting &s : kSettings) fixed[s.var] = getenv(s.var) != NULL;
+    fixed["LAA_REMAP"] = getenv("LAA_REMAP") != NULL;
     load_config();
     for (int k = 0; k < 2; k++) {                        /* the game files the player chose (env.txt lines win) */
         const char *var = k ? "LAA_ROMFS" : "LAA_EXEFS";
@@ -1006,6 +1123,10 @@ const char *run_script() {                               /* this frame's steps; 
         static const char *const names[UI_ACTIONS] = { "UP", "DOWN", "LEFT", "RIGHT", "A", "B", "L", "R", "MENU" };
         for (int a = 0; a < UI_ACTIONS; a++)
             if (st.what == names[a]) { act(a); printf("ui: script: %s at %.2f s\n", names[a], SDL_GetTicksNS() / 1e9); }
+        if (st.what.rfind("PAD", 0) == 0) {              /* PADn: controller button n (SDL's numbers) pressed */
+            printf("ui: script: %s\n", st.what.c_str());
+            ui_button_pressed(atoi(st.what.c_str() + 3));
+        }
         if (st.what == "SHOT") {
             snprintf(shot, sizeof shot, "%s/ui_%03u.png", getenv("LAA_UI_SHOTS") ? getenv("LAA_UI_SHOTS") : ".", shots++);
             path = shot;
@@ -1028,6 +1149,12 @@ extern "C" int ui_frame(void) {
     uint64_t frame_ns = bstep > UI_BUILD_IDLE && bstep < UI_BUILD_DONE ? 33300000ull : 16600000ull;
     if (now - last_frame < frame_ns) SDL_DelayNS(frame_ns - (now - last_frame));
     last_frame = now = SDL_GetTicksNS();
+    if (remap_waiting >= 0 && SDL_GetTicks() - remap_since > REMAP_WAIT_MS) {   /* (no button: the wait ends) */
+        int t = remap_waiting;
+        remap_waiting = -1;
+        build_settings();
+        remap_focus("remap-" + std::to_string(t));
+    }
     const char *shot = run_script();
     if (showing == 1) { poll_picking(); update_build(); poll_update_check(); }
     if (update_doc->IsVisible()) refresh_update();
@@ -1074,7 +1201,29 @@ extern "C" void ui_set_value(const char *name, const char *value) {
     else unsetenv(name);
 }
 
+extern "C" int ui_waiting_for_button(void) {
+    return remap_waiting >= 0;
+}
+
+extern "C" void ui_button_pressed(int source) {
+    if (remap_waiting < 0) return;
+    std::vector<int> l = remap_list();
+    int t = remap_waiting;
+    for (size_t u = 0; u < l.size(); u++)            /* (the button's old target gets this one's: they swap) */
+        if (l[u] == source && (int)u != t) l[u] = l[(size_t)t];
+    l[(size_t)t] = source;
+    remap_waiting = -1;
+    remap_save(l);
+    build_settings();
+    remap_focus("remap-" + std::to_string(t));
+}
+
 extern "C" void ui_apply_settings(void) {
+    if (!fixed["LAA_REMAP"]) {                        /* (Button Remapping: kept in the config like the settings) */
+        std::string r = config.count("LAA_REMAP") ? config["LAA_REMAP"] : "";
+        if (!r.empty()) setenv("LAA_REMAP", r.c_str(), 1);
+        else unsetenv("LAA_REMAP");
+    }
     for (const Setting &s : kSettings) {
         if (fixed[s.var]) continue;
         int c = choice_of(s);

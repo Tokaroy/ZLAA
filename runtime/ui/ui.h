@@ -46,6 +46,16 @@ void host_request_files_access(void);
 void host_pick_folder(void);
 int host_picked_folder(char *out, size_t size);
 
+/* Button Remapping (Settings > Input): the menu asks for a controller button; main.c hands it the next one pressed
+ * (a source: an SDL gamepad button, or 100 / 101 for the left / right trigger) */
+int ui_waiting_for_button(void);
+void ui_button_pressed(int source);
+/* Provided by the host: the game's buttons that can be remapped (targets), their default sources, sources' names */
+int host_pad_targets(void);
+const char *host_pad_target_name(int target);
+int host_pad_default(int target);
+void host_pad_source_name(int source, char *out, size_t size);
+
 /* Provided by the host: building the game's code on the device (Android: host/builder.c; elsewhere -1 / idle) */
 enum { UI_BUILD_IDLE, UI_BUILD_PREPARING, UI_BUILD_TRANSLATING, UI_BUILD_COMPILING, UI_BUILD_LINKING, UI_BUILD_DONE,
        UI_BUILD_FAILED };
