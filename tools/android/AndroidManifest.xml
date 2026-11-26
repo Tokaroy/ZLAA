@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- ZLAA's Android app. The activity is SDL's (org.libsdl.app.SDLActivity, as our ZLAAActivity, which adds a
      folder picker): it creates the window and loads libSDL3.so and libmain.so (our runtime), then calls main().
-     Landscape only, no touch controls (the AYN Thor has buttons). -->
+     Landscape only; a controller or the on-screen touch controls (runtime/touch.c). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.github.zlaa"
     android:versionCode="100"

@@ -10,8 +10,11 @@
         <heading class="window-title"><icon class="news" />What's New</heading>
         <p id="news-version" class="hint" />
         <news-list>
-            <news-item><dot />Freezing that occurred spontaneously during gameplay has been fixed.</news-item>
-            <news-item><dot />Shaders are now made in a new way, and the GPU runs them more efficiently.</news-item>
+            <news-item><dot />Touch controls: play without a controller, with a d-pad or joystick, and move, resize and fade every button.</news-item>
+            <news-item><dot />Button remapping for controllers.</news-item>
+            <news-item><dot />ZLAA Builder: build the game on a Windows or Linux PC in minutes.</news-item>
+            <news-item><dot />Quit now returns to the start screen.</news-item>
+            <news-item><dot />Less stutter the first time you visit a place.</news-item>
         </news-list>
         <menu-list>
             <button id="news-ok">OK</button>

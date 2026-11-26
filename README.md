@@ -61,6 +61,7 @@ ZLAA is young. The first areas of the game (Mabe Village, Toronbo Shores, Myster
 
 - Native ARM64 code and Vulkan graphics: no emulator in between.
 - Handheld mode at 720p, or docked at 1080p.
+- Touch controls for playing without a controller: a d-pad or joystick, Nintendo or Xbox layout, and every button can be moved, resized and faded (pause menu › Edit Touch Controls).
 - Press Home and the game pauses like a Switch would; come back and the pause menu is waiting.
 - Movies play through Android's own video decoder.
 - Every language the game has, including Japanese, Chinese and Korean (Settings › Interface › Game Language).
@@ -69,7 +70,7 @@ ZLAA is young. The first areas of the game (Mabe Village, Toronbo Shores, Myster
 **Menus**
 
 - A start screen and a pause menu on the Home/Mode button or Android's Back button.
-- Settings for console mode, an FPS counter and its corner, Nintendo or Xbox button layout, stick dead zone, volume, skipping the start screen, and a note while shaders compile.
+- Settings for console mode, an FPS counter and its corner, Nintendo or Xbox button layout, button remapping, stick dead zone, volume, skipping the start screen, and a note while shaders compile.
 
 ![Settings: video, input, audio, interface](docs/settings.jpg)
 
@@ -77,6 +78,7 @@ ZLAA is young. The first areas of the game (Mabe Village, Toronbo Shores, Myster
 
 - Any of the game's three releases: 1.0.0, 1.0.1 or 1.1.0.
 - The game is built on your device from your files, at the pace you pick (Cool, Balanced or Fast), and the build takes a break whenever the device warms up.
+- Or build it on a Windows or Linux PC with ZLAA Builder, in 10-30 minutes.
 - Your files are read where they are: nothing is copied, nothing is uploaded.
 
 # Getting started
