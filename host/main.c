@@ -638,6 +638,8 @@ int host_update_status(double *done_mb, double *total_mb, char *message, size_t 
     *total_mb = total / 1048576.0;
     return state;
 }
+/* the pause menu's Quit to Start Screen (restart_app below): a helper process ends this one and opens the app anew */
+static void host_restart(void) { call_activity("restartApp", "()V", NULL, NULL); }
 #else
 static SDL_Window *dialog_window;
 static SDL_Mutex *picked_lock;
@@ -718,6 +720,24 @@ int host_update_status(double *done_mb, double *total_mb, char *message, size_t 
     return UI_UPDATE_IDLE;
 }
 #endif
+
+/* The pause menu's Quit to Start Screen. The game can't be unloaded (its threads run its code, which never ends, and
+ * hold its memory, handles and GPU objects), so the app starts again, at the start screen (with Skip Main Menu on:
+ * the game's own title screen): Android: ZLAAActivity.restartApp; the desktop: this program again (execv). */
+static char **main_argv;
+static void restart_app(void) {
+    printf("menu: quit to the start screen: the app starts again\n");
+    render_background(1);                            /* (the pipeline cache saved) */
+    fflush(NULL);
+#ifdef __ANDROID__
+    host_restart();
+#else
+    execv("/proc/self/exe", main_argv);
+    perror("restart");
+#endif
+    fflush(NULL);
+    _exit(0);                                        /* (exit() under running threads: see vk_fail) */
+}
 #endif
 
 #define LOAD_BASE 0x8000000ull   /* must match recomp.py --base (same as yuzu/Ryujinx) */
@@ -764,6 +784,9 @@ static void fatal_message(const char *text) {
 
 int main(int argc, char **argv) {
     const char *exefs = NULL, *romfs = NULL, *dump = NULL;
+#ifdef LAA_HAVE_UI
+    main_argv = argv;
+#endif
 #ifndef __ANDROID__
     move_old_folders();
     printf("ZLAA %s (build %s)\n", LAA_VERSION, LAA_COMMIT);
@@ -951,6 +974,7 @@ int main(int argc, char **argv) {
         if (menu && ui_open()) {
             int r = ui_frame();
             if (r == UI_QUIT) { fflush(NULL); _exit(0); }
+            if (r == UI_RESTART) restart_app();
             if (ui_settings_changed()) settings_changed();
             if (r == UI_RESUME || r == UI_EDIT_TOUCH) {
                 printf("menu: resumed%s\n", r == UI_EDIT_TOUCH ? ", editing the touch controls" : "");

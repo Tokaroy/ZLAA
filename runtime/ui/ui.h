@@ -22,7 +22,9 @@ typedef struct {
 
 /* What the menu is told; main.c turns buttons, keys and the stick into these */
 enum { UI_UP, UI_DOWN, UI_LEFT, UI_RIGHT, UI_ACCEPT, UI_BACK, UI_TAB_PREV, UI_TAB_NEXT, UI_MENU, UI_ACTIONS };
-enum { UI_NONE, UI_PLAY, UI_QUIT, UI_RESUME, UI_EDIT_TOUCH };   /* (EDIT_TOUCH: resume, editing the touch layout) */
+enum { UI_NONE, UI_PLAY, UI_QUIT, UI_RESUME, UI_EDIT_TOUCH, UI_RESTART };
+/* (EDIT_TOUCH: resume, editing the touch layout; RESTART: the pause menu's quit: the app starts again, at the start
+ * screen) */
 
 int ui_init(void *sdl_window, const UiPaths *paths);   /* after render_init; 0 = ok */
 void ui_start_menu(void);                /* show the start screen */

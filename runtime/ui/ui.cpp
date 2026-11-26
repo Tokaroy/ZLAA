@@ -962,7 +962,7 @@ public:
             if (id == "resume") { result = UI_RESUME; return; }
             if (id == "touch-edit") { result = UI_EDIT_TOUCH; return; }
             if (id == "settings") { open_settings(); return; }
-            if (id == "quit") { result = UI_QUIT; return; }
+            if (id == "quit") { result = showing == 2 ? UI_RESTART : UI_QUIT; return; }
             if (id == "close") { close_settings(); return; }
             if (id.rfind("tab-", 0) == 0 && id != "tab-bar") { tab = id.substr(4); build_settings(); return; }
             if (id.rfind("row-", 0) == 0) { change_setting(atoi(id.c_str() + 4), 1); return; }

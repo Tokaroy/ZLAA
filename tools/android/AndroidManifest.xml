@@ -49,5 +49,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- the pause menu's Quit to Start Screen: ends the app's process and starts it again (RestartActivity.java) -->
+        <activity
+            android:name="io.github.zlaa.RestartActivity"
+            android:exported="false"
+            android:process=":restart"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true" />
     </application>
 </manifest>

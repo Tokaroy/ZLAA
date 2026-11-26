@@ -77,6 +77,16 @@ public class ZLAAActivity extends SDLActivity {
         return p;
     }
 
+    /** The pause menu's Quit to Start Screen: the app starts again. RestartActivity, in a process of its own, ends this
+     *  one (the native side also exits right after this) and opens ZLAAActivity anew. Called from the native thread:
+     *  startActivity has handed the request to Android when it returns. */
+    public static void restartApp() {
+        Intent i = new Intent(mSingleton, RestartActivity.class);
+        i.putExtra(RestartActivity.PID, android.os.Process.myPid());
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        mSingleton.startActivity(i);
+    }
+
     /* ---- updates: GitHub's latest release (the start screen's badge), downloaded and installed in the app ---- */
 
     /** The newest release's tag ("v0.1.2"); "" when the check failed (offline...); null while there is no answer. */
