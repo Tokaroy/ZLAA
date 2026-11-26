@@ -348,7 +348,7 @@ def main():
     if not SOURCES["recompiler"] or not SOURCES["runtime"]:
         fail("the recompiler or the runtime headers are missing beside this script: unpack the whole package")
 
-    say("ZLAA Builder: makes the game code for ZLAA from your own game files.\n")
+    say("ZLAA Builder\n")
     exefs = find_exefs(args.game or pick_folder())
     game_id = build_id(exefs)
     version = VERSIONS.get(game_id)
@@ -392,14 +392,14 @@ def main():
     if args.push:
         push(lib)
         say("Done. Start ZLAA: it takes the game code from there.")
-    else:
-        say("\nNow copy %s to your phone, into one of:\n"
-            "  - the Download folder (ZLAA needs All files access: it asks for it when you choose your game files)\n"
-            "  - the folder that holds your game files' exefs and romfs folders\n"
-            "  - Android/data/io.github.zlaa/files/game\n"
-            "then start ZLAA: it shows Ready and takes the file from there (you can delete it afterwards)."
-            % os.path.basename(lib))
-
+        return
+    say("\nAll done! Now:\n"
+        "  1. Copy %s to your phone's Download folder.\n"
+        "  2. Start ZLAA. The start screen shows Ready: press Play.\n"
+        "ZLAA copies the file to its own storage, so you can delete it from Download afterwards."
+        % os.path.basename(lib))
+    if WINDOWS:                                      # (the file shown in Explorer, ready to copy)
+        subprocess.run(["explorer", "/select,", lib])
 
 if __name__ == "__main__":
     main()
