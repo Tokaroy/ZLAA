@@ -194,6 +194,28 @@ row value {
     white-space: nowrap;
 }
 
+/* a slider setting (Touch Controls Opacity): a bar filled up to its value, before the value itself */
+slider-track {
+    display: block;
+    width: 120dp;
+    height: 8dp;
+    margin: 0 var(--gap-xs);
+    border-radius: 4dp;
+    background-color: rgba(var(--text-rgb), 12%);
+}
+
+slider-fill {
+    display: block;
+    height: 8dp;
+    border-radius: 4dp;
+    background-color: var(--gold);
+}
+
+row value span.slider-value {
+    min-width: 48dp;
+    text-align: right;
+}
+
 row value icon {
     font-size: 22dp;
     color: var(--muted);

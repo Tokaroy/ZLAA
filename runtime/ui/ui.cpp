@@ -51,6 +51,7 @@ struct Setting {
     std::vector<Choice> choices;
     int fallback;                                       /* the choice when the config doesn't say */
     const char *help;
+    bool slider = false;                                /* shown as a bar (steps of one scale), not just the label */
 };
 
 const char *const kTabs[] = { "Video", "Input", "Audio", "Interface", "About" };
@@ -76,6 +77,10 @@ const std::vector<Setting> kSettings = {
       "Changes the touchscreen layout of ABXY. Does not change anything if using a controller." },
     { "Input", "Touch Stick Position", "LAA_TOUCH_FIXED", { { "Follows Your Thumb", NULL }, { "Stays in Place", "1" } },
       0, "Choose if the joystick follows where your thumb is placed." },
+    { "Input", "Touch Controls Opacity", "LAA_TOUCH_OPACITY",
+      { { "20%", "20" }, { "30%", "30" }, { "40%", "40" }, { "50%", "50" }, { "60%", "60" }, { "70%", "70" },
+        { "80%", "80" }, { "90%", "90" }, { "100%", NULL } }, 8,
+      "How see-through the touch controls are. Lower shows more of the game behind them.", true },
     { "Input", "Touch Layout", "LAA_TOUCH_LAYOUT", { { "Default", NULL }, { "Custom", NULL } }, 0,
       "Move and resize the touch controls from the pause menu." },
     { "Input", "Stick Dead Zone", "LAA_DEADZONE",
@@ -633,6 +638,13 @@ void show_remap_help() {
         "buttons.</p>");
 }
 
+/* A slider setting's bar: filled up to its choice (a percentage: that much of the bar) */
+std::string slider_bar(const Setting &s, int c) {
+    if (!s.slider || c < 0 || s.choices.size() < 2) return "";
+    const char *label = s.choices[(size_t)c].label;
+    int fill = strchr(label, '%') ? atoi(label) : 100 * c / (int)(s.choices.size() - 1);
+    return "<slider-track><slider-fill style=\"width: " + std::to_string(fill) + "%;\"/></slider-track>";
+}
 
 void build_settings() {
     std::string tabs, rows;
@@ -660,7 +672,9 @@ void build_settings() {
         rows += "<row id=\"row-" + std::to_string(i) + "\"" + (fixed[s.var] ? " class=\"fixed\"" : "") + ">"
                 "<key>" + esc(s.name) + "</key><value>" +
                 (fixed[s.var] ? "<icon class=\"lock\"/><span>" + esc(value) + "</span>"
-                               : "<icon class=\"left\"/><span>" + esc(value) + "</span><icon class=\"right\"/>") +
+                               : "<icon class=\"left\"/>" + slider_bar(s, c) +
+                                 (s.slider ? "<span class=\"slider-value\">" : "<span>") + esc(value) +
+                                 "</span><icon class=\"right\"/>") +
                 "</value></row>";
         if (strcmp(s.var, "LAA_SWAP_FACE") == 0)         /* (Button Remapping: after Button Layout) */
             rows += std::string("<row id=\"remap-row\"><key>Button Remapping</key><value><span>") +
@@ -745,6 +759,7 @@ void change_setting(int row, int step) {
     const Setting &s = kSettings[(size_t)row];
     if (fixed[s.var]) return;
     int n = (int)s.choices.size(), c = (choice_of(s) + step + n) % n;
+    if (s.slider) c = std::min(std::max(choice_of(s) + step, 0), n - 1);   /* (a slider stops at its ends) */
     const char *v = s.choices[(size_t)c].value;
     if (is_layout(s) && c == 1) return;              /* (Custom comes from the editor; from here only Default) */
     config[s.var] = v ? v : "";

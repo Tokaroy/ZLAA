@@ -72,6 +72,7 @@ static float stick_x, stick_y;                         /* and where it points: -
 static int stick_held, dpad_x, dpad_y;                 /* the d-pad's direction: -1, 0, 1 each (y up) */
 static int mode = -1, shown, present = -1, use_stick, fixed_stick, editing;
 static int xbox_style;                                 /* LAA_TOUCH_SWAP=1: A and B, X and Y trade places */
+static float opacity = 1;                              /* LAA_TOUCH_OPACITY (percent): how solid they are drawn */
 static float off[SLOTS][2];                            /* each control's offset from its default place (u) */
 static float scl[SLOTS];                               /*   and its size, times the default */
 static int grouped = 1;                                /* A B X Y move and resize as one */
@@ -122,6 +123,8 @@ static void read_mode(void) {
     fixed_stick = fx && *fx == '1';
     const char *sw = getenv("LAA_TOUCH_SWAP");
     xbox_style = sw && *sw == '1';
+    const char *op = getenv("LAA_TOUCH_OPACITY");     /* (percent, 20..100) */
+    opacity = op && *op ? fminf(fmaxf((float)atof(op), 20.0f), 100.0f) / 100.0f : 1.0f;
     if (editing) return;                               /* (the layout being edited stays) */
     layout_default();
     const char *l = getenv("LAA_TOUCH_LAYOUT");        /* "g;x,y,s;x,y,s;...": grouped, then each slot's place, size */
@@ -441,6 +444,7 @@ int touch_view(int w, int h, TouchView *v) {
         }
         held[TS_GROUP] |= grouped;
         v->count = 0;
+        v->opacity = editing ? 1 : opacity;          /* (the editor shows them solid) */
         for (int c = TS_FACE_A; c <= TS_MENU; c++) {
             Place p = place(c, W, u);
             v->items[v->count++] = (TouchItem){ c, (int)lrintf(p.x), (int)lrintf(p.y), held[c], 0 };

@@ -489,6 +489,7 @@ static struct {
     int w, h, used, dirty, ready;        /* the screen it was drawn for; rows in use; to upload; layout GENERAL */
     float k;                             /* sprite pixels per screen pixel (< 1 if they didn't all fit) */
     float scale[TS_COUNT];               /* the sizes the player chose, as drawn */
+    float opacity;                       /* (and the opacity) */
     VkOffset3D cell[TS_COUNT][2][2];     /* each sprite's place in the atlas: [sprite][pressed] */
 } ta;
 
@@ -630,6 +631,7 @@ static void ta_paint(int sprite, int pressed, int x0, int y0, int w, int h, floa
     float ring = fmaxf(2.0f, (base ? hw * 0.035f : dpad ? size * 0.06f : size * 0.07f));
     float fill_a = base ? 0.20f : knob ? (pressed ? 0.62f : 0.40f) : pressed ? 0.72f : dpad ? 0.42f : 0.38f;
     float ring_a = base ? (pressed ? 0.55f : 0.40f) : pressed ? 0.90f : 0.55f;
+    fill_a *= ta.opacity, ring_a *= ta.opacity;      /* (Touch Controls Opacity) */
     float cap = sprite >= TS_L && sprite <= TS_ZR ? hh * 0.95f : sprite >= TS_RESET ? hh * 0.85f : hh * 0.82f;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
@@ -645,12 +647,13 @@ static void ta_paint(int sprite, int pressed, int x0, int y0, int w, int h, floa
             uint32_t *d = &ta.pixels[(size_t)(y0 + y) * TA_SIZE + x0 + x];
             osd_blend(d, knob ? light : pressed ? gold : dark, in * fill_a);
             osd_blend(d, light, (in - clamp01(sd - ring + 0.5f)) * ring_a);
-            if (!knob && !base) osd_blend(d, pressed ? ink : text, label_at(sprite, px, py, cx, cy, (float)w, (float)h, cap) * 0.92f);
+            if (!knob && !base) osd_blend(d, pressed ? ink : text, label_at(sprite, px, py, cx, cy, (float)w, (float)h, cap) * 0.92f * ta.opacity);
         }
 }
 
 /* The atlas for a screen w x h: the sprites at the size touch_view gives them, smaller if they don't fit */
 static void ta_build(const TouchView *v, int w, int h) {
+    ta.opacity = v->opacity;
     for (ta.k = 1;; ta.k *= 0.85f) {
         memset(ta.pixels, 0, (size_t)TA_SIZE * TA_ROWS * 4);
         int x = 0, y = 0, row = 0, fits = 1;
@@ -678,7 +681,8 @@ static void ta_build(const TouchView *v, int w, int h) {
 }
 
 static void touch_draw(VkCommandBuffer cmd, int s, const TouchView *v) {
-    if (ta.w != (int)out.width || ta.h != (int)out.height || memcmp(ta.scale, v->scale, sizeof ta.scale) != 0)
+    if (ta.w != (int)out.width || ta.h != (int)out.height || memcmp(ta.scale, v->scale, sizeof ta.scale) != 0 ||
+        ta.opacity != v->opacity)
         ta_build(v, (int)out.width, (int)out.height);   /* (the screen or a size changed: drawn again) */
     if (ta.dirty) {
         barrier(cmd, ta.image, ta.ready ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,

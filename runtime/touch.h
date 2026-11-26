@@ -11,6 +11,7 @@
  *   LAA_TOUCH_FIXED   1: the stick stays in its place; unset: it appears where the thumb lands
  *   LAA_TOUCH_SWAP    1: A B X Y placed as on an Xbox controller (A bottom, B right, X left, Y top)
  *   LAA_TOUCH_LAYOUT  where the player put each control and how big (touch_edit; unset = the defaults)
+ *   LAA_TOUCH_OPACITY 20..100: how solid the controls are drawn, in percent (unset = 100: as designed)
  */
 #ifndef TOUCH_H
 #define TOUCH_H
@@ -57,6 +58,7 @@ typedef struct {
     int dpad_r, arm_w, wide_w;                             /* (the d-pad: middle to an arm's end, an arm's width;
                                                               the editor's wide buttons' width) */
     float scale[TS_COUNT];                                 /* each sprite's size, times the above (the player's) */
+    float opacity;                                         /* 0.2..1: the sprites' alpha, times this */
 } TouchView;
 /* 0 if the controls are hidden; else 1 and v filled */
 int touch_view(int w, int h, TouchView *v);
