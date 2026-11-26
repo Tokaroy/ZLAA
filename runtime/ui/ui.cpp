@@ -80,7 +80,7 @@ const std::vector<Setting> kSettings = {
     { "Input", "Touch Controls Opacity", "LAA_TOUCH_OPACITY",
       { { "20%", "20" }, { "30%", "30" }, { "40%", "40" }, { "50%", "50" }, { "60%", "60" }, { "70%", "70" },
         { "80%", "80" }, { "90%", "90" }, { "100%", NULL } }, 8,
-      "How see-through the touch controls are. Lower shows more of the game behind them.", true },
+      "How see-through the touch controls are.", true },
     { "Input", "Touch Layout", "LAA_TOUCH_LAYOUT", { { "Default", NULL }, { "Custom", NULL } }, 0,
       "Move and resize the touch controls from the pause menu." },
     { "Input", "Stick Dead Zone", "LAA_DEADZONE",

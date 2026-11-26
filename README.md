@@ -52,7 +52,6 @@ ZLAA is young. The first areas of the game (Mabe Village, Toronbo Shores, Myster
 
 ### Rough edges
 
-- Short hitches the first time a new effect appears, while its shader is prepared, and some stutter on the beach.
 - Versions 1.0.1 and 1.1.0 pass tests, but only 1.0.0 has had long play sessions.
 
 ## What it does
@@ -61,7 +60,7 @@ ZLAA is young. The first areas of the game (Mabe Village, Toronbo Shores, Myster
 
 - Native ARM64 code and Vulkan graphics: no emulator in between.
 - Handheld mode at 720p, or docked at 1080p.
-- Touch controls for playing without a controller: a d-pad or joystick, Nintendo or Xbox layout, and every button can be moved, resized and faded (pause menu › Edit Touch Controls).
+- Touch controls for playing without a controller: a d-pad or joystick, Nintendo or Xbox layout, and every button can be moved, resized and transparency-adjusted.
 - Press Home and the game pauses like a Switch would; come back and the pause menu is waiting.
 - Movies play through Android's own video decoder.
 - Every language the game has, including Japanese, Chinese and Korean (Settings › Interface › Game Language).
