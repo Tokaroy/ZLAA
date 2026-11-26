@@ -123,15 +123,13 @@ Yes, and it's much faster than on a phone. Download **ZLAA Builder** for Windows
 - the folder that holds your game files
 - `Android/data/io.github.zlaa/files/game`
 
-Then start ZLAA. The builder's `README.txt` has the details. Use the builder from the same release as your app: ZLAA won't take game code from another version.
-
 #### Where are my saves?
 
 In `/sdcard/Android/data/io.github.zlaa/files/save/`.
 
 # Building
 
-ZLAA builds on Linux (WSL works too). Everything made from the game (the generated C code and the built game) comes from your own files and must stay out of this repository.
+ZLAA builds on Linux. Everything made from the game comes from your own files.
 
 ```
 pip install -r requirements.txt
